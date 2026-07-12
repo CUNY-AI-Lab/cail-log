@@ -22,9 +22,11 @@
  *     `severity_text`, so "find failures" is a numeric filter. An UNKNOWN
  *     level from an untyped caller coerces UP to `fatal`, never down — a
  *     miscategorized failure is never hidden below the failure filter.
- *   - L4 — each call emits exactly ONE JSON object via an injectable sink
- *     (default `console.log(JSON.stringify(event))`); the clock is injectable
- *     so tests are deterministic. The logger itself NEVER throws.
+ *   - L4 — each call emits exactly ONE JSON object via an injectable sink.
+ *     The portable default emits one NDJSON line; Workers can opt into
+ *     {@link workersStructuredSink} for native field indexing and severity.
+ *     The clock is injectable so tests are deterministic. The logger itself
+ *     NEVER throws.
  *   - L5 — {@link Sensitive} wraps secrets so accidental interpolation or
  *     serialization emits `"[REDACTED]"`. Known gap: a caller who deliberately
  *     unwraps `.value`.
@@ -457,8 +459,9 @@ export interface CailLoggerOptions {
   /** Deployment environment (e.g. `"prod"`, `"staging"`). */
   env?: string;
   /**
-   * Where the single JSON event goes (L4). Default:
-   * `console.log(JSON.stringify(event))`, which Workers Logs indexes per key.
+   * Where the single JSON event goes (L4). Default: one portable NDJSON line
+   * through `console.log`. Cloudflare Workers should pass
+   * {@link workersStructuredSink} to use native field indexing and severity.
    * A throwing sink is caught — the logger never throws — and the event is
    * dropped with a fixed, content-free `console.error` note.
    */
@@ -489,6 +492,22 @@ const LEVELS: ReadonlySet<string> = new Set([
 
 function defaultSink(event: CailLogEvent): void {
   console.log(JSON.stringify(event));
+}
+
+/**
+ * Cloudflare Workers structured-console sink. Workers Logs receives the event
+ * object directly, indexes its fields, and derives native severity from the
+ * console method. Keep this explicit: Node and Bun format console objects as
+ * multi-line inspection text rather than portable NDJSON.
+ */
+export function workersStructuredSink(event: CailLogEvent): void {
+  if (event.severity_number >= CAIL_SEVERITY_NUMBER.error) {
+    console.error(event);
+  } else if (event.severity_number >= CAIL_SEVERITY_NUMBER.warn) {
+    console.warn(event);
+  } else {
+    console.log(event);
+  }
 }
 
 function deriveMessage(event: string, errorCode: string | undefined): string {

@@ -27,7 +27,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "prepublishOnly": "bun run build",
-    "prepare": "tsc -p tsconfig.build.json"
+    "prepare": "bun run build"
   },
   "devDependencies": {
     "@types/node": "^20.17.6",

@@ -22,9 +22,11 @@
  *     `severity_text`, so "find failures" is a numeric filter. An UNKNOWN
  *     level from an untyped caller coerces UP to `fatal`, never down — a
  *     miscategorized failure is never hidden below the failure filter.
- *   - L4 — each call emits exactly ONE JSON object via an injectable sink
- *     (default `console.log(JSON.stringify(event))`); the clock is injectable
- *     so tests are deterministic. The logger itself NEVER throws.
+ *   - L4 — each call emits exactly ONE JSON object via an injectable sink.
+ *     The portable default emits one NDJSON line; Workers can opt into
+ *     {@link workersStructuredSink} for native field indexing and severity.
+ *     The clock is injectable so tests are deterministic. The logger itself
+ *     NEVER throws.
  *   - L5 — {@link Sensitive} wraps secrets so accidental interpolation or
  *     serialization emits `"[REDACTED]"`. Known gap: a caller who deliberately
  *     unwraps `.value`.
@@ -310,6 +312,23 @@ const LEVELS = new Set([
 ]);
 function defaultSink(event) {
     console.log(JSON.stringify(event));
+}
+/**
+ * Cloudflare Workers structured-console sink. Workers Logs receives the event
+ * object directly, indexes its fields, and derives native severity from the
+ * console method. Keep this explicit: Node and Bun format console objects as
+ * multi-line inspection text rather than portable NDJSON.
+ */
+export function workersStructuredSink(event) {
+    if (event.severity_number >= CAIL_SEVERITY_NUMBER.error) {
+        console.error(event);
+    }
+    else if (event.severity_number >= CAIL_SEVERITY_NUMBER.warn) {
+        console.warn(event);
+    }
+    else {
+        console.log(event);
+    }
 }
 function deriveMessage(event, errorCode) {
     // Own-property lookup ONLY: `"constructor"` is a valid slug, and a plain

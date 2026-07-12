@@ -9,6 +9,7 @@ import {
   CAIL_EVENT_INVALID,
   CAIL_SEVERITY_NUMBER,
   redactLogEvent,
+  workersStructuredSink,
   type CailLogEvent,
   type CailLogFields,
   type CailLogLevel,
@@ -437,7 +438,7 @@ describe("L4 one wide event, injectable sink/clock", () => {
     ]);
   });
 
-  it("L4d default sink writes ONE JSON.stringify'd line via console.log", () => {
+  it("L4d default sink writes one portable NDJSON line", () => {
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
     const logger = createCailLogger({
       service: "model-proxy",
@@ -448,6 +449,44 @@ describe("L4 one wide event, injectable sink/clock", () => {
     const line = spy.mock.calls[0]![0] as string;
     expect(typeof line).toBe("string");
     expect(JSON.parse(line)).toEqual(minimalEvent({ status: 200 }));
+  });
+
+  it("L4d2 Workers sink emits structured objects through native severity methods", () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logger = createCailLogger({
+      service: "model-proxy",
+      sink: workersStructuredSink,
+      clock: () => NOW_MS,
+    });
+    logger.info(CAIL_EVENTS.REQUEST_COMPLETED, { status: 200 });
+    logger.warn(CAIL_EVENTS.REQUEST_COMPLETED, { status: 429 });
+    logger.error(CAIL_EVENTS.UPSTREAM_ERROR, { status: 502 });
+
+    expect(logSpy.mock.calls).toEqual([
+      [minimalEvent({ status: 200 })],
+    ]);
+    expect(warnSpy.mock.calls).toEqual([
+      [
+        minimalEvent({
+          severity_number: 13,
+          severity_text: "WARN",
+          status: 429,
+        }),
+      ],
+    ]);
+    expect(errorSpy.mock.calls).toEqual([
+      [
+        minimalEvent({
+          event: CAIL_EVENTS.UPSTREAM_ERROR,
+          message: "Upstream provider call failed.",
+          severity_number: 17,
+          severity_text: "ERROR",
+          status: 502,
+        }),
+      ],
+    ]);
   });
 
   it("L4e a throwing sink is contained — the logger never throws", () => {
