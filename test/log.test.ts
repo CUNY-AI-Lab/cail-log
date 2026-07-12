@@ -173,6 +173,18 @@ describe("L1 typed allowlist", () => {
     expect(events[0]!.model).toBe("x".repeat(256));
   });
 
+  it("L1f2 C1 controls and U+2028/U+2029 are stripped too (NEL / line-separator injection)", () => {
+    const { events, logger } = capture();
+    logger.info(CAIL_EVENTS.REQUEST_COMPLETED, {
+      // NEL (U+0085) and the other C1 controls can split lines in some
+      // processors; U+2028/U+2029 are JS/ES line terminators (OWASP log-injection).
+      route: '/v1/run\u0085{"fake":"nel event"}\u2028second\u2029\u0080\u009f',
+      model: "m\u008dodel",
+    });
+    expect(events[0]!.route).toBe('/v1/run{"fake":"nel event"}second');
+    expect(events[0]!.model).toBe("model");
+  });
+
   it("L1j shape-known fields enforce their shape or drop (review M2)", () => {
     const { events, logger } = capture();
     logger.info(CAIL_EVENTS.REQUEST_COMPLETED, {
@@ -355,6 +367,7 @@ describe("L3 severity", () => {
       ["info", 9],
       ["warn", 13],
       ["error", 17],
+      ["fatal", 21],
     ];
     for (const [level] of table) logger[level](CAIL_EVENTS.REQUEST_COMPLETED);
     table.forEach(([level, num], i) => {
@@ -363,16 +376,32 @@ describe("L3 severity", () => {
       expect(CAIL_SEVERITY_NUMBER[level]).toBe(num);
     });
     expect(events[4]!.severity_number).toBeGreaterThanOrEqual(17);
+    expect(events[5]!.severity_number).toBeGreaterThanOrEqual(17);
   });
 
-  it("L3b log(level, …) honors the level; an unknown level coerces to info", () => {
+  it("L3b log(level, …) honors the level; fatal is a first-class band (OTel FATAL=21)", () => {
     const { events, logger } = capture();
     logger.log("warn", CAIL_EVENTS.REQUEST_COMPLETED);
     expect(events[0]!.severity_number).toBe(13);
-    logger.log("fatal" as CailLogLevel, CAIL_EVENTS.REQUEST_COMPLETED);
-    expect(events[1]!.severity_number).toBe(9);
-    expect(events[1]!.severity_text).toBe("INFO");
-    expect(JSON.stringify(events[1])).not.toContain("fatal");
+    logger.log("fatal", CAIL_EVENTS.REQUEST_COMPLETED);
+    expect(events[1]!.severity_number).toBe(21);
+    expect(events[1]!.severity_text).toBe("FATAL");
+  });
+
+  it("L3c an UNKNOWN level coerces to the HIGHEST severity, never silently downgrades", () => {
+    // Fail-closed: a miscategorized failure must never be hidden below the
+    // `severity_number >= 17` failure filter (OTel severity bands).
+    const { events, logger } = capture();
+    for (const bogus of ["critical", "verbose", "", 42, null]) {
+      logger.log(bogus as CailLogLevel, CAIL_EVENTS.REQUEST_COMPLETED);
+    }
+    for (const [i, e] of events.entries()) {
+      expect(e.severity_number, `level attempt ${i}`).toBe(21);
+      expect(e.severity_text).toBe("FATAL");
+    }
+    // The bogus level name itself is never echoed into the event.
+    expect(JSON.stringify(events)).not.toContain("critical");
+    expect(JSON.stringify(events)).not.toContain("verbose");
   });
 });
 

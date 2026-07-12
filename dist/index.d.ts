@@ -18,8 +18,10 @@
  *     `message` is derived from a static lookup the library owns — never from
  *     a caller argument. A non-slug event name is replaced with
  *     `"event.invalid"` and never echoed.
- *   - L3 — level maps to OTel `severity_number` (error = 17) and
- *     `severity_text`, so "find failures" is a numeric filter.
+ *   - L3 — level maps to OTel `severity_number` (error = 17, fatal = 21) and
+ *     `severity_text`, so "find failures" is a numeric filter. An UNKNOWN
+ *     level from an untyped caller coerces UP to `fatal`, never down — a
+ *     miscategorized failure is never hidden below the failure filter.
  *   - L4 — each call emits exactly ONE JSON object via an injectable sink
  *     (default `console.log(JSON.stringify(event))`); the clock is injectable
  *     so tests are deterministic. The logger itself NEVER throws.
@@ -31,18 +33,20 @@
  *     drops anything not on the allowlist, guarding the cast-a-raw-object
  *     path and future drift.
  *   - L7 — {@link correlationFromHeaders} ADOPTS an existing `traceparent` /
- *     `X-CAIL-Request-Id` and mints only when genuinely absent;
- *     {@link outboundCorrelationHeaders} produces the headers to forward.
+ *     `X-CAIL-Request-Id` and mints only when genuinely absent; an inbound
+ *     `tracestate` riding a valid `traceparent` is carried opaquely and
+ *     {@link outboundCorrelationHeaders} forwards it verbatim (W3C Trace
+ *     Context §3.3 MUST) alongside the headers it produces.
  *     "Adopt, never regenerate."
  *
  * The public surface is `string`/`number`/plain-object types only — no
  * ambient platform (`DOM`/Workers) types leak out of the `.d.ts`.
  */
-export type CailLogLevel = "error" | "warn" | "info" | "debug" | "trace";
+export type CailLogLevel = "fatal" | "error" | "warn" | "info" | "debug" | "trace";
 /**
  * OTel Logs Data Model severity numbers (the first number of each band:
- * TRACE=1, DEBUG=5, INFO=9, WARN=13, ERROR=17). "Show me failures" is
- * `severity_number >= 17`.
+ * TRACE=1, DEBUG=5, INFO=9, WARN=13, ERROR=17, FATAL=21). "Show me failures"
+ * is `severity_number >= 17`.
  */
 export declare const CAIL_SEVERITY_NUMBER: Readonly<Record<CailLogLevel, number>>;
 /**
@@ -169,6 +173,7 @@ export interface CailLoggerOptions {
 export interface CailLogger {
     /** Emit one wide event at an explicit level. */
     log(level: CailLogLevel, event: string, fields?: CailLogFields): void;
+    fatal(event: string, fields?: CailLogFields): void;
     error(event: string, fields?: CailLogFields): void;
     warn(event: string, fields?: CailLogFields): void;
     info(event: string, fields?: CailLogFields): void;
@@ -201,6 +206,7 @@ export declare function redactLogEvent(obj: Record<string, unknown>): Record<str
 export declare function createCailLogger(options: CailLoggerOptions): CailLogger;
 /** Canonical inbound/outbound correlation header names. */
 export declare const TRACEPARENT_HEADER = "traceparent";
+export declare const TRACESTATE_HEADER = "tracestate";
 export declare const CAIL_REQUEST_ID_HEADER = "x-cail-request-id";
 export interface CailCorrelation {
     /** 32 lowercase hex chars (W3C Trace Context), never all-zero. */
@@ -209,6 +215,14 @@ export interface CailCorrelation {
     span_id: string;
     /** The fleet request id (`X-CAIL-Request-Id`), UUID-shaped when minted. */
     request_id: string;
+    /**
+     * The inbound `tracestate` header, carried OPAQUELY (W3C Trace Context
+     * §3.3: a vendor that continues the trace MUST forward it). Present only
+     * when the inbound `traceparent` was adopted AND the header passed the
+     * minimal structural checks in {@link correlationFromHeaders}; never
+     * minted, parsed, or reordered by this library.
+     */
+    tracestate?: string;
 }
 /**
  * Structural stand-in for the platform `Headers` (so no DOM types leak into
@@ -226,6 +240,12 @@ export interface CailHeadersLike {
  *     is minted for this hop (that is this service's own span, per W3C —
  *     the inbound parent-id belongs to the caller);
  *   - a well-formed `X-CAIL-Request-Id` → adopted verbatim;
+ *   - a `tracestate` beside an ADOPTED `traceparent` → carried opaquely
+ *     after minimal structural validation, so
+ *     {@link outboundCorrelationHeaders} can forward it (W3C §3.3 MUST);
+ *     malformed tracestate is dropped fail-closed, and tracestate arriving
+ *     WITHOUT a valid traceparent is dropped too (the spec forbids using
+ *     it when traceparent failed to parse) — it is NEVER minted;
  *   - anything absent or malformed (all-zero ids, version `ff`, version-00
  *     with trailing fields, wrong shape) → minted fresh, as when the
  *     service is hit directly.
@@ -238,9 +258,13 @@ export declare function correlationFromHeaders(source: CailHeadersLike | {
 /**
  * The headers to forward DOWNSTREAM so the next hop can adopt this trace:
  * a W3C `traceparent` (version 00, parent-id = OUR span) plus
- * `X-CAIL-Request-Id`. Throws `TypeError` on a malformed correlation —
- * that is a programmer error, and forwarding a broken id would silently
- * fork the trace.
+ * `X-CAIL-Request-Id` — and, when the inbound `tracestate` was carried on
+ * the correlation, that `tracestate` verbatim (W3C Trace Context §3.3:
+ * vendors receiving tracestate must send it on outgoing requests; this
+ * library continues the trace, so it forwards). No inbound tracestate →
+ * no outbound tracestate; one is never invented. Throws `TypeError` on a
+ * malformed correlation — that is a programmer error, and forwarding a
+ * broken id (or a malformed tracestate) would silently corrupt the trace.
  *
  * The trace-flags byte is DELIBERATELY always `01` (sampled): the CAIL fleet
  * logs every request (head_sampling happens at the sink, not per-trace), so

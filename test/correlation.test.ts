@@ -3,6 +3,7 @@ import {
   correlationFromHeaders,
   outboundCorrelationHeaders,
   TRACEPARENT_HEADER,
+  TRACESTATE_HEADER,
   CAIL_REQUEST_ID_HEADER,
   type CailCorrelation,
 } from "../src/index.js";
@@ -160,6 +161,139 @@ describe("L7 mint only when genuinely absent", () => {
       expect(c.trace_id).toMatch(HEX32);
       expect(c.request_id).toMatch(UUID);
     }
+  });
+});
+
+// ===========================================================================
+// L7 — tracestate: W3C Trace Context §3.3 ("Vendors receiving a tracestate
+// request header MUST send it to outgoing requests"). Because this library
+// CONTINUES the inbound trace (adopts trace-id), it must carry tracestate
+// through — opaquely, never parsed or reordered, never invented.
+// ===========================================================================
+
+describe("L7 tracestate forwarding (W3C §3.3)", () => {
+  const TS = "congo=t61rcWkgMzE,rojo=00f067aa0ba902b7";
+
+  it("L7m inbound tracestate beside a valid traceparent is carried and forwarded VERBATIM", () => {
+    const c = correlationFromHeaders(
+      withHeaders({ traceparent: TP, tracestate: TS }),
+    );
+    expect(c.trace_id).toBe(TRACE);
+    expect(c.tracestate).toBe(TS);
+    const wire = outboundCorrelationHeaders(c);
+    expect(wire[TRACESTATE_HEADER]).toBe(TS);
+    expect(wire[TRACEPARENT_HEADER]).toBe(`00-${TRACE}-${c.span_id}-01`);
+  });
+
+  it("L7n absent inbound tracestate -> none carried, none emitted (never invented)", () => {
+    const c = correlationFromHeaders(withHeaders({ traceparent: TP }));
+    expect(c.tracestate).toBeUndefined();
+    expect(outboundCorrelationHeaders(c)).not.toHaveProperty(
+      TRACESTATE_HEADER,
+    );
+    // Fully-minted correlation (no inbound headers at all): same.
+    const minted = correlationFromHeaders(withHeaders({}));
+    expect(minted.tracestate).toBeUndefined();
+    expect(outboundCorrelationHeaders(minted)).not.toHaveProperty(
+      TRACESTATE_HEADER,
+    );
+  });
+
+  it("L7o tracestate is DROPPED when the traceparent is absent or invalid (spec: must not use it)", () => {
+    const noTrace: Array<Record<string, string>> = [
+      { tracestate: TS }, // no traceparent at all
+      { traceparent: `ff-${TRACE}-${PARENT_SPAN}-01`, tracestate: TS },
+      { traceparent: `00-${"0".repeat(32)}-${PARENT_SPAN}-01`, tracestate: TS },
+      { traceparent: "not-a-traceparent", tracestate: TS },
+    ];
+    for (const headers of noTrace) {
+      const c = correlationFromHeaders(withHeaders(headers));
+      expect(c.tracestate, JSON.stringify(headers)).toBeUndefined();
+      expect(c.trace_id).not.toBe(TRACE); // minted fresh, as today
+    }
+  });
+
+  it("L7p malformed tracestate is dropped FAIL-CLOSED; the trace itself is still adopted", () => {
+    const bad = [
+      "", // empty
+      "   ", // whitespace only
+      "no-equals-sign", // member without key=value shape
+      "ok=fine,no-equals", // one bad member spoils the (opaque) list
+      "=value", // empty key
+      "key=", // empty value
+      "a=b\u0007,c=d", // control char (C0)
+      "a=b\u0085c=d", // control char (C1 NEL)
+      "k=v\u2028", // U+2028 line separator (non-ASCII)
+      "k=нет", // non-ASCII value
+      `k=${"v".repeat(512)}`, // 514 chars total: over the 512-char guidance
+      Array.from({ length: 33 }, (_, i) => `k${i}=v`).join(","), // 33 members > 32
+    ];
+    for (const ts of bad) {
+      // A bare reader, not `Headers`: real Headers rejects some of these
+      // values itself (non-ByteString), and the helper must be robust to
+      // ANY reader implementation.
+      const c = correlationFromHeaders({
+        get: (name: string) =>
+          name === TRACEPARENT_HEADER
+            ? TP
+            : name === TRACESTATE_HEADER
+              ? ts
+              : null,
+      });
+      expect(c.trace_id, `tracestate ${JSON.stringify(ts)}`).toBe(TRACE);
+      expect(c.tracestate, `tracestate ${JSON.stringify(ts)}`).toBeUndefined();
+      expect(outboundCorrelationHeaders(c)).not.toHaveProperty(
+        TRACESTATE_HEADER,
+      );
+    }
+  });
+
+  it("L7p2 the 512-char / 32-member spec limits are inclusive (boundary values pass)", () => {
+    const maxLen = `k=${"v".repeat(510)}`; // exactly 512 chars
+    const maxMembers = Array.from({ length: 32 }, (_, i) => `k${i}=v`).join(
+      ",",
+    ); // exactly 32 members
+    for (const ts of [maxLen, maxMembers]) {
+      const c = correlationFromHeaders(
+        withHeaders({ traceparent: TP, tracestate: ts }),
+      );
+      expect(c.tracestate).toBe(ts);
+    }
+  });
+
+  it("L7q round trip: the NEXT hop receives and re-forwards the same tracestate", () => {
+    const first = correlationFromHeaders(
+      withHeaders({ traceparent: TP, tracestate: TS }),
+    );
+    const wire = outboundCorrelationHeaders(first);
+    const second = correlationFromHeaders(withHeaders(wire));
+    expect(second.trace_id).toBe(first.trace_id);
+    expect(second.tracestate).toBe(TS);
+    expect(outboundCorrelationHeaders(second)[TRACESTATE_HEADER]).toBe(TS);
+  });
+
+  it("L7r outbound fails LOUD (TypeError) on a hand-built malformed tracestate", () => {
+    const good: CailCorrelation = {
+      trace_id: TRACE,
+      span_id: PARENT_SPAN,
+      request_id: RID,
+    };
+    const bad = [
+      "no-equals",
+      "a=b",
+      ` ${TS} `, // not exact: surrounding whitespace
+      42 as never,
+      Array.from({ length: 33 }, (_, i) => `k${i}=v`).join(","),
+    ];
+    for (const ts of bad) {
+      expect(
+        () => outboundCorrelationHeaders({ ...good, tracestate: ts }),
+        JSON.stringify(ts),
+      ).toThrow(TypeError);
+    }
+    expect(() =>
+      outboundCorrelationHeaders({ ...good, tracestate: TS }),
+    ).not.toThrow();
   });
 });
 

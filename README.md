@@ -121,8 +121,9 @@ There is **no argument you can pass a prompt into**:
   `"event.invalid"` and never echoed;
 - the emitted `message` is derived from a static, library-owned lookup on
   `event` (+ `error_code`) — never from caller input;
-- string values are control-character-stripped (no log-line injection) and
-  truncated to 256 chars; numbers must be finite; enums are exact.
+- string values are control-character-stripped (C0, DEL, the C1 block incl.
+  NEL, and U+2028/U+2029 — no log-line injection, even through a non-JSON
+  sink) and truncated to 256 chars; numbers must be finite; enums are exact.
 
 The suite proves it with a canary: `CANARY-PII-7f3a` is pushed at the logger
 through every avenue the API exposes and asserted absent from every emitted
@@ -137,8 +138,8 @@ HMAC — never email, names, or the raw OIDC `sub`.
 | Field | Type | Meaning |
 |---|---|---|
 | `timestamp` | string | ISO-8601 UTC (injectable clock) |
-| `severity_text` | string | `TRACE`/`DEBUG`/`INFO`/`WARN`/`ERROR` |
-| `severity_number` | number | OTel: 1/5/9/13/17 — failures are `>= 17` |
+| `severity_text` | string | `TRACE`/`DEBUG`/`INFO`/`WARN`/`ERROR`/`FATAL` |
+| `severity_number` | number | OTel: 1/5/9/13/17/21 — failures are `>= 17` |
 | `event` | string | Closed-vocabulary slug (see `CAIL_EVENTS`) |
 | `message` | string | Library-derived from `event`+`error_code`; never caller input |
 | `service` | string | Service slug (constructor-bound; slug-validated) |
@@ -192,11 +193,11 @@ Weakening any of these is a **major** semver bump every consumer opts into.
 |---|-----------|
 | L1 | **Typed allowlist only.** The log API accepts only `CailLogFields`. Unknown keys are dropped at runtime; adding a field requires editing the type (forced review). Wrong-typed values are dropped, never coerced; strings are control-char-stripped and truncated. |
 | L2 | **No caller-supplied free text.** No `message` parameter exists. `event` must be a slug or becomes `"event.invalid"`; the emitted `message` comes only from a static library-owned lookup. |
-| L3 | **Severity.** `error/warn/info/debug/trace` → OTel `severity_number` 17/13/9/5/1 + uppercase `severity_text`. Failures are a numeric filter (`>= 17`). |
+| L3 | **Severity.** `fatal/error/warn/info/debug/trace` → OTel `severity_number` 21/17/13/9/5/1 + uppercase `severity_text`. Failures are a numeric filter (`>= 17`). An unknown level from an untyped caller coerces UP to `fatal` (21), never down — a miscategorized failure is never hidden below the failure filter. |
 | L4 | **One wide event per call**, via an injectable sink (default `console.log(JSON.stringify(event))`), ISO-8601 UTC timestamp from an injectable clock. The logger **never throws**; a throwing sink drops the event with a fixed, content-free `console.error` note. Construction fails loud (`TypeError`) on invalid config. |
 | L5 | **`Sensitive<T>`.** `sensitive(v)` makes `toString`/`toJSON`/inspect/interpolation all yield `"[REDACTED]"`. Known gap: deliberately unwrapping `.value`. |
 | L6 | **Defense-in-depth denylist.** `redactLogEvent` runs on every final object: denylisted keys masked, non-allowlist keys dropped, `quota` policed, `Sensitive` values masked, and every surviving value held to its allowlisted shape — guarding the raw-object path and future drift. |
-| L7 | **Adopt, never regenerate.** `correlationFromHeaders` adopts a valid inbound `traceparent` trace-id and `X-CAIL-Request-Id` verbatim, minting fresh ids only when genuinely absent or malformed (version-00 `traceparent` must have exactly four fields; a new span id is minted per hop — that is this service's own span). `X-CAIL-Request-Id` is the sole inter-service request-id carrier. The OpenAI-compatible `x-request-id` header is a response-only alias that HTTP boundaries may echo with the same value; this library neither adopts nor forwards that alias. Outbound trace-flags are deliberately always `01` (the fleet logs every request; sampling happens at the sink). `outboundCorrelationHeaders` produces the `traceparent` + `X-CAIL-Request-Id` pair to forward; it throws `TypeError` on malformed input rather than silently forking a trace. |
+| L7 | **Adopt, never regenerate.** `correlationFromHeaders` adopts a valid inbound `traceparent` trace-id and `X-CAIL-Request-Id` verbatim, minting fresh ids only when genuinely absent or malformed (version-00 `traceparent` must have exactly four fields; a new span id is minted per hop — that is this service's own span). `X-CAIL-Request-Id` is the sole inter-service request-id carrier. The OpenAI-compatible `x-request-id` header is a response-only alias that HTTP boundaries may echo with the same value; this library neither adopts nor forwards that alias. Outbound trace-flags are deliberately always `01` (the fleet logs every request; sampling happens at the sink). An inbound `tracestate` riding a VALID `traceparent` is carried opaquely — never parsed, reordered, or invented — after minimal structural validation (printable ASCII, ≤512 chars, 1–32 `key=value` members; malformed → dropped fail-closed, and tracestate without a valid traceparent is dropped per spec), and `outboundCorrelationHeaders` forwards it verbatim (W3C Trace Context §3.3: a vendor that continues the trace must send `tracestate` on outgoing requests). `outboundCorrelationHeaders` produces the `traceparent` + `X-CAIL-Request-Id` pair (+ the carried `tracestate`, if any) to forward; it throws `TypeError` on malformed input rather than silently forking a trace. |
 
 ## Signature
 
@@ -210,7 +211,8 @@ createCailLogger(options: {
 }): CailLogger
 
 interface CailLogger {
-  log(level: "error"|"warn"|"info"|"debug"|"trace", event: string, fields?: CailLogFields): void;
+  log(level: "fatal"|"error"|"warn"|"info"|"debug"|"trace", event: string, fields?: CailLogFields): void;
+  fatal(event: string, fields?: CailLogFields): void;
   error(event: string, fields?: CailLogFields): void;
   warn(event: string, fields?: CailLogFields): void;
   info(event: string, fields?: CailLogFields): void;
@@ -223,12 +225,13 @@ isSensitive(value: unknown): boolean
 redactLogEvent(obj: Record<string, unknown>): Record<string, unknown>
 
 correlationFromHeaders(source: Headers | { headers: Headers }):  // structural — any { get(name) }
-  { trace_id: string; span_id: string; request_id: string }
-outboundCorrelationHeaders(corr): { traceparent: string; "x-cail-request-id": string }
+  { trace_id: string; span_id: string; request_id: string; tracestate?: string }
+outboundCorrelationHeaders(corr):
+  { traceparent: string; "x-cail-request-id": string; tracestate?: string }  // tracestate only if carried
 
 CAIL_EVENTS            // the standard event slugs
 CAIL_SEVERITY_NUMBER   // the L3 mapping
-TRACEPARENT_HEADER, CAIL_REQUEST_ID_HEADER
+TRACEPARENT_HEADER, TRACESTATE_HEADER, CAIL_REQUEST_ID_HEADER
 ```
 
 The public `.d.ts` uses plain `string`/`number`/object types only — the

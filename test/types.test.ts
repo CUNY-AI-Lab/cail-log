@@ -39,8 +39,12 @@ describe("type-level contract", () => {
     // @ts-expect-error L1 — status is a number, not a string
     logger.info(CAIL_EVENTS.REQUEST_COMPLETED, { status: "200" });
 
-    // @ts-expect-error L3 — "fatal" is not a CailLogLevel
+    // @ts-expect-error L3 — "critical" is not a CailLogLevel
+    logger.log("critical", CAIL_EVENTS.REQUEST_COMPLETED);
+
+    // Positive control: fatal IS a first-class level (OTel FATAL band).
     logger.log("fatal", CAIL_EVENTS.REQUEST_COMPLETED);
+    logger.fatal(CAIL_EVENTS.REQUEST_COMPLETED);
 
     // Positive control: the full typed struct compiles.
     logger.info(CAIL_EVENTS.REQUEST_COMPLETED, {

@@ -18,8 +18,10 @@
  *     `message` is derived from a static lookup the library owns — never from
  *     a caller argument. A non-slug event name is replaced with
  *     `"event.invalid"` and never echoed.
- *   - L3 — level maps to OTel `severity_number` (error = 17) and
- *     `severity_text`, so "find failures" is a numeric filter.
+ *   - L3 — level maps to OTel `severity_number` (error = 17, fatal = 21) and
+ *     `severity_text`, so "find failures" is a numeric filter. An UNKNOWN
+ *     level from an untyped caller coerces UP to `fatal`, never down — a
+ *     miscategorized failure is never hidden below the failure filter.
  *   - L4 — each call emits exactly ONE JSON object via an injectable sink
  *     (default `console.log(JSON.stringify(event))`); the clock is injectable
  *     so tests are deterministic. The logger itself NEVER throws.
@@ -31,8 +33,10 @@
  *     drops anything not on the allowlist, guarding the cast-a-raw-object
  *     path and future drift.
  *   - L7 — {@link correlationFromHeaders} ADOPTS an existing `traceparent` /
- *     `X-CAIL-Request-Id` and mints only when genuinely absent;
- *     {@link outboundCorrelationHeaders} produces the headers to forward.
+ *     `X-CAIL-Request-Id` and mints only when genuinely absent; an inbound
+ *     `tracestate` riding a valid `traceparent` is carried opaquely and
+ *     {@link outboundCorrelationHeaders} forwards it verbatim (W3C Trace
+ *     Context §3.3 MUST) alongside the headers it produces.
  *     "Adopt, never regenerate."
  *
  * The public surface is `string`/`number`/plain-object types only — no
@@ -40,8 +44,8 @@
  */
 /**
  * OTel Logs Data Model severity numbers (the first number of each band:
- * TRACE=1, DEBUG=5, INFO=9, WARN=13, ERROR=17). "Show me failures" is
- * `severity_number >= 17`.
+ * TRACE=1, DEBUG=5, INFO=9, WARN=13, ERROR=17, FATAL=21). "Show me failures"
+ * is `severity_number >= 17`.
  */
 export const CAIL_SEVERITY_NUMBER = Object.freeze({
     trace: 1,
@@ -49,6 +53,7 @@ export const CAIL_SEVERITY_NUMBER = Object.freeze({
     info: 9,
     warn: 13,
     error: 17,
+    fatal: 21,
 });
 // ===========================================================================
 // Events (L2) — the closed vocabulary
@@ -226,6 +231,10 @@ const MAX_STRING = 256;
 /**
  * Strings are stripped of control characters (log-injection defense: no
  * newline can fake a second event), trimmed, and truncated to 256 chars.
+ * The strip covers C0 (U+0000–U+001F), DEL (U+007F), the C1 block
+ * (U+0080–U+009F, incl. NEL) and the Unicode line/paragraph separators
+ * U+2028/U+2029 — a non-JSON sink or a NEL-splitting processor must never
+ * see a fake second line (OWASP Logging Cheat Sheet, log injection).
  * A {@link Sensitive} wrapper masks to `"[REDACTED]"`; anything that is not
  * a string is dropped.
  */
@@ -235,7 +244,9 @@ function sanitizeString(value) {
     if (typeof value !== "string")
         return undefined;
     // eslint-disable-next-line no-control-regex
-    const cleaned = value.replace(/[\u0000-\u001f\u007f]/g, "").trim();
+    const cleaned = value
+        .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, "")
+        .trim();
     if (cleaned === "")
         return undefined;
     return cleaned.length > MAX_STRING ? cleaned.slice(0, MAX_STRING) : cleaned;
@@ -290,6 +301,7 @@ function isPlainObject(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 const LEVELS = new Set([
+    "fatal",
     "error",
     "warn",
     "info",
@@ -478,7 +490,11 @@ export function createCailLogger(options) {
     };
     function emit(level, event, fields) {
         try {
-            const lvl = LEVELS.has(level) ? level : "info";
+            // FAIL-CLOSED level coercion: an unknown level from an untyped caller
+            // coerces to the HIGHEST band ("fatal", OTel 21), never downward — a
+            // miscategorized failure must never hide below the `>= 17` failure
+            // filter. (Throwing is not an option here: emit never throws, per L4.)
+            const lvl = LEVELS.has(level) ? level : "fatal";
             let nowMs;
             try {
                 nowMs = clock();
@@ -501,6 +517,7 @@ export function createCailLogger(options) {
     }
     return {
         log: emit,
+        fatal: (event, fields) => emit("fatal", event, fields),
         error: (event, fields) => emit("error", event, fields),
         warn: (event, fields) => emit("warn", event, fields),
         info: (event, fields) => emit("info", event, fields),
@@ -513,6 +530,7 @@ export function createCailLogger(options) {
 // ===========================================================================
 /** Canonical inbound/outbound correlation header names. */
 export const TRACEPARENT_HEADER = "traceparent";
+export const TRACESTATE_HEADER = "tracestate";
 export const CAIL_REQUEST_ID_HEADER = "x-cail-request-id";
 const TRACEPARENT_RE = /^([0-9a-f]{2})-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})(-.*)?$/;
 const ZERO_TRACE = "0".repeat(32);
@@ -520,6 +538,49 @@ const ZERO_SPAN = "0".repeat(16);
 const REQUEST_ID_RE = /^[A-Za-z0-9._-]{1,128}$/;
 const HEX_TRACE_RE = /^[0-9a-f]{32}$/;
 const HEX_SPAN_RE = /^[0-9a-f]{16}$/;
+// W3C Trace Context tracestate limits: vendors MUST be able to handle up to
+// 32 list-members, and SHOULD propagate at least 512 characters. `tracestate`
+// is a comma-separated list of `key=value` members whose contents this
+// library deliberately does NOT interpret (spec: vendors must not parse or
+// depend on other vendors' entries) — validation here is purely structural
+// and FAIL-CLOSED: anything outside these bounds is dropped, never repaired.
+const TRACESTATE_MAX_CHARS = 512;
+const TRACESTATE_MAX_MEMBERS = 32;
+/** Printable ASCII only — a header value smuggling control chars is malformed. */
+const TRACESTATE_PRINTABLE_RE = /^[ -~]+$/;
+/**
+ * Minimal, opaque structural validation of a `tracestate` header value:
+ * printable ASCII, <= 512 chars, 1–32 comma-separated members that each look
+ * like `key=value`. Returns the trimmed value to carry verbatim, or
+ * `undefined` (drop, fail-closed). Vendor contents are never interpreted.
+ */
+function sanitizeTracestate(raw) {
+    if (typeof raw !== "string")
+        return undefined;
+    // Trim ONLY ASCII space/tab (HTTP OWS). `String.prototype.trim` would also
+    // eat U+2028/U+2029/etc. and thereby LAUNDER a malformed value into a valid
+    // one — fail-closed means such input must reach the printable check and drop.
+    const value = raw.replace(/^[ \t]+|[ \t]+$/g, "");
+    if (value === "" || value.length > TRACESTATE_MAX_CHARS)
+        return undefined;
+    if (!TRACESTATE_PRINTABLE_RE.test(value))
+        return undefined;
+    // Empty list members (`a=b,,c=d`) are legal per spec; skip them when
+    // counting, but every NON-empty member must have a key=value shape.
+    const members = value
+        .split(",")
+        .map((m) => m.trim())
+        .filter((m) => m !== "");
+    if (members.length === 0 || members.length > TRACESTATE_MAX_MEMBERS) {
+        return undefined;
+    }
+    for (const member of members) {
+        const eq = member.indexOf("=");
+        if (eq <= 0 || eq === member.length - 1)
+            return undefined;
+    }
+    return value;
+}
 function randomHex(bytes) {
     const buf = new Uint8Array(bytes);
     crypto.getRandomValues(buf);
@@ -562,6 +623,12 @@ function headersOf(source) {
  *     is minted for this hop (that is this service's own span, per W3C —
  *     the inbound parent-id belongs to the caller);
  *   - a well-formed `X-CAIL-Request-Id` → adopted verbatim;
+ *   - a `tracestate` beside an ADOPTED `traceparent` → carried opaquely
+ *     after minimal structural validation, so
+ *     {@link outboundCorrelationHeaders} can forward it (W3C §3.3 MUST);
+ *     malformed tracestate is dropped fail-closed, and tracestate arriving
+ *     WITHOUT a valid traceparent is dropped too (the spec forbids using
+ *     it when traceparent failed to parse) — it is NEVER minted;
  *   - anything absent or malformed (all-zero ids, version `ff`, version-00
  *     with trailing fields, wrong shape) → minted fresh, as when the
  *     service is hit directly.
@@ -571,6 +638,7 @@ function headersOf(source) {
 export function correlationFromHeaders(source) {
     let traceId;
     let requestId;
+    let tracestate;
     // Even PROPERTY ACCESS on a hostile source (a throwing `.headers` getter,
     // a Proxy trap) must not throw out of this helper (review finding M1) —
     // it sits on the request path and "never throws" is load-bearing.
@@ -583,9 +651,11 @@ export function correlationFromHeaders(source) {
     }
     if (headers) {
         let rawTp = null;
+        let rawTs = null;
         let rawRid = null;
         try {
             rawTp = headers.get(TRACEPARENT_HEADER);
+            rawTs = headers.get(TRACESTATE_HEADER);
             rawRid = headers.get(CAIL_REQUEST_ID_HEADER);
         }
         catch {
@@ -603,24 +673,36 @@ export function correlationFromHeaders(source) {
                 traceId = m[2];
             }
         }
+        // tracestate rides ONLY on an adopted traceparent (W3C: if traceparent
+        // failed to parse, the vendor MUST NOT use the tracestate).
+        if (traceId !== undefined) {
+            tracestate = sanitizeTracestate(rawTs);
+        }
         if (typeof rawRid === "string") {
             const rid = rawRid.trim();
             if (REQUEST_ID_RE.test(rid))
                 requestId = rid;
         }
     }
-    return {
+    const correlation = {
         trace_id: traceId ?? randomHex(16),
         span_id: randomHex(8),
         request_id: requestId ?? mintRequestId(),
     };
+    if (tracestate !== undefined)
+        correlation.tracestate = tracestate;
+    return correlation;
 }
 /**
  * The headers to forward DOWNSTREAM so the next hop can adopt this trace:
  * a W3C `traceparent` (version 00, parent-id = OUR span) plus
- * `X-CAIL-Request-Id`. Throws `TypeError` on a malformed correlation —
- * that is a programmer error, and forwarding a broken id would silently
- * fork the trace.
+ * `X-CAIL-Request-Id` — and, when the inbound `tracestate` was carried on
+ * the correlation, that `tracestate` verbatim (W3C Trace Context §3.3:
+ * vendors receiving tracestate must send it on outgoing requests; this
+ * library continues the trace, so it forwards). No inbound tracestate →
+ * no outbound tracestate; one is never invented. Throws `TypeError` on a
+ * malformed correlation — that is a programmer error, and forwarding a
+ * broken id (or a malformed tracestate) would silently corrupt the trace.
  *
  * The trace-flags byte is DELIBERATELY always `01` (sampled): the CAIL fleet
  * logs every request (head_sampling happens at the sink, not per-trace), so
@@ -630,7 +712,7 @@ export function outboundCorrelationHeaders(correlation) {
     if (!isPlainObject(correlation)) {
         throw new TypeError("cail-log: correlation must be an object");
     }
-    const { trace_id, span_id, request_id } = correlation;
+    const { trace_id, span_id, request_id, tracestate } = correlation;
     if (typeof trace_id !== "string" ||
         !HEX_TRACE_RE.test(trace_id) ||
         trace_id === ZERO_TRACE) {
@@ -644,8 +726,17 @@ export function outboundCorrelationHeaders(correlation) {
     if (typeof request_id !== "string" || !REQUEST_ID_RE.test(request_id)) {
         throw new TypeError("cail-log: request_id must match [A-Za-z0-9._-]{1,128}");
     }
-    return {
+    // tracestate is optional; when present it must be EXACTLY a value the
+    // structural validator would carry (fail loud on a hand-built bad one —
+    // emitting it would ship a malformed header downstream in CAIL's name).
+    if (tracestate !== undefined && sanitizeTracestate(tracestate) !== tracestate) {
+        throw new TypeError("cail-log: tracestate must be a structurally valid W3C tracestate list (or omitted)");
+    }
+    const out = {
         [TRACEPARENT_HEADER]: `00-${trace_id}-${span_id}-01`,
         [CAIL_REQUEST_ID_HEADER]: request_id,
     };
+    if (tracestate !== undefined)
+        out[TRACESTATE_HEADER] = tracestate;
+    return out;
 }
