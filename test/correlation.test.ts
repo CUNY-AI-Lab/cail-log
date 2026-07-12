@@ -81,6 +81,12 @@ describe("L7 mint only when genuinely absent", () => {
     expect(a.request_id).not.toBe(b.request_id);
   });
 
+  it("L7f2 does not adopt the response-only x-request-id compatibility alias", () => {
+    const c = correlationFromHeaders(withHeaders({ "x-request-id": RID }));
+    expect(c.request_id).not.toBe(RID);
+    expect(c.request_id).toMatch(UUID);
+  });
+
   it("L7g malformed traceparent variants are treated as absent (minted instead)", () => {
     const bad = [
       `00-${"0".repeat(32)}-${PARENT_SPAN}-01`, // all-zero trace id
@@ -168,6 +174,7 @@ describe("L7 outbound headers", () => {
       [TRACEPARENT_HEADER]: `00-${TRACE}-1234567890abcdef-01`,
       [CAIL_REQUEST_ID_HEADER]: RID,
     });
+    expect(outboundCorrelationHeaders(c)).not.toHaveProperty("x-request-id");
   });
 
   it("L7k round trip: the NEXT hop adopts the same trace_id and request_id, new span", () => {
