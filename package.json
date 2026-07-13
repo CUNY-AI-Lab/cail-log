@@ -1,7 +1,7 @@
 {
   "name": "@cuny-ai-lab/cail-log",
-  "version": "1.0.0",
-  "description": "The CAIL structured logger: a zero-retention-safe, agent-queryable wide-event logger with a typed safe-to-log allowlist and no free-text channel. Runs unchanged in the browser, Cloudflare Workers, and Node >=20.",
+  "version": "0.3.0",
+  "description": "The pre-release CAIL operational event primitive: typed event contracts, trusted fleet attribution, privacy-safe diagnostics, and explicit structured sinks.",
   "type": "module",
   "license": "MIT",
   "sideEffects": false,
@@ -16,18 +16,21 @@
   "files": [
     "dist",
     "src",
-    "README.md"
+    "README.md",
+    "DESIGN.md"
   ],
   "engines": {
     "node": ">=20"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "check:dist": "bun run build && git diff --exit-code -- dist",
     "typecheck": "tsc -p tsconfig.build.json --noEmit && tsc -p tsconfig.test.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "prepublishOnly": "bun run build",
-    "prepare": "bun run build"
+    "prepare": "bun run build",
+    "verify": "bun run build && bun test && bun run typecheck && bun pm pack --dry-run --ignore-scripts"
   },
   "devDependencies": {
     "@types/node": "^20.17.6",

@@ -1,5 +1,8 @@
 node_modules/
-dist/
+dist/*
+!dist/*.js
+!dist/*.d.ts
+!dist/*.map
 *.log
 .DS_Store
 coverage/

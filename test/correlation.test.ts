@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   correlationFromHeaders,
   outboundCorrelationHeaders,
@@ -30,6 +30,7 @@ describe("L7 adopt", () => {
   it("L7a a valid traceparent is ADOPTED: same trace_id, FRESH span for this hop", () => {
     const c = correlationFromHeaders(withHeaders({ traceparent: TP }));
     expect(c.trace_id).toBe(TRACE);
+    expect(c.trace_flags).toBe(1);
     expect(c.span_id).toMatch(HEX16);
     expect(c.span_id).not.toBe(PARENT_SPAN);
     // request_id was absent -> minted UUID.
@@ -72,6 +73,23 @@ describe("L7 mint only when genuinely absent", () => {
     expect(c.span_id).toMatch(HEX16);
     expect(c.span_id).not.toBe("0".repeat(16));
     expect(c.request_id).toMatch(UUID);
+    expect(c.trace_flags).toBe(0);
+  });
+
+  it("uses an explicit local recording decision when provided", () => {
+    const sampled = correlationFromHeaders(withHeaders({}), { sampled: true });
+    const notSampled = correlationFromHeaders(
+      withHeaders({ traceparent: TP }),
+      { sampled: false },
+    );
+    expect(sampled.trace_flags).toBe(1);
+    expect(notSampled.trace_flags).toBe(0);
+    expect(outboundCorrelationHeaders(sampled)[TRACEPARENT_HEADER]).toMatch(
+      /-01$/,
+    );
+    expect(
+      outboundCorrelationHeaders(notSampled)[TRACEPARENT_HEADER],
+    ).toMatch(/-00$/);
   });
 
   it("L7f minted ids differ across calls (no fixed fallback id)", () => {
@@ -80,6 +98,28 @@ describe("L7 mint only when genuinely absent", () => {
     expect(a.trace_id).not.toBe(b.trace_id);
     expect(a.span_id).not.toBe(b.span_id);
     expect(a.request_id).not.toBe(b.request_id);
+  });
+
+  it("retries all-zero random identifiers and fails boundedly on entropy failure", () => {
+    let calls = 0;
+    const random = vi
+      .spyOn(globalThis.crypto, "getRandomValues")
+      .mockImplementation((array) => {
+        calls += 1;
+        const bytes = array as Uint8Array;
+        bytes.fill(calls === 1 ? 0 : 1);
+        return array;
+      });
+    const correlation = correlationFromHeaders(withHeaders({}));
+    expect(correlation.trace_id).not.toBe("0".repeat(32));
+    expect(correlation.span_id).not.toBe("0".repeat(16));
+
+    random.mockImplementation((array) => {
+      (array as Uint8Array).fill(0);
+      return array;
+    });
+    expect(() => correlationFromHeaders(withHeaders({}))).toThrow(TypeError);
+    random.mockRestore();
   });
 
   it("L7f2 does not adopt the response-only x-request-id compatibility alias", () => {
@@ -215,8 +255,6 @@ describe("L7 tracestate forwarding (W3C §3.3)", () => {
 
   it("L7p malformed tracestate is dropped FAIL-CLOSED; the trace itself is still adopted", () => {
     const bad = [
-      "", // empty
-      "   ", // whitespace only
       "no-equals-sign", // member without key=value shape
       "ok=fine,no-equals", // one bad member spoils the (opaque) list
       "=value", // empty key
@@ -248,8 +286,28 @@ describe("L7 tracestate forwarding (W3C §3.3)", () => {
     }
   });
 
+  it("accepts W3C empty members and omits an entirely empty tracestate", () => {
+    const withEmptyMembers = correlationFromHeaders(
+      withHeaders({ traceparent: TP, tracestate: "congo=a, ,rojo=b," }),
+    );
+    expect(withEmptyMembers.tracestate).toBe("congo=a,rojo=b");
+
+    for (const tracestate of ["", "   ", ", ,"]) {
+      const correlation = correlationFromHeaders({
+        get: (name: string) =>
+          name === TRACEPARENT_HEADER
+            ? TP
+            : name === TRACESTATE_HEADER
+              ? tracestate
+              : null,
+      });
+      expect(correlation.trace_id).toBe(TRACE);
+      expect(correlation.tracestate).toBeUndefined();
+    }
+  });
+
   it("L7p2 the 512-char / 32-member spec limits are inclusive (boundary values pass)", () => {
-    const maxLen = `k=${"v".repeat(510)}`; // exactly 512 chars
+    const maxLen = `a=${"v".repeat(256)},b=${"v".repeat(251)}`; // exactly 512 chars; each value is within its own 256-char limit
     const maxMembers = Array.from({ length: 32 }, (_, i) => `k${i}=v`).join(
       ",",
     ); // exactly 32 members
@@ -276,6 +334,7 @@ describe("L7 tracestate forwarding (W3C §3.3)", () => {
     const good: CailCorrelation = {
       trace_id: TRACE,
       span_id: PARENT_SPAN,
+      trace_flags: 1,
       request_id: RID,
     };
     const bad = [
@@ -302,10 +361,11 @@ describe("L7 outbound headers", () => {
     const c: CailCorrelation = {
       trace_id: TRACE,
       span_id: "1234567890abcdef",
+      trace_flags: 0,
       request_id: RID,
     };
     expect(outboundCorrelationHeaders(c)).toEqual({
-      [TRACEPARENT_HEADER]: `00-${TRACE}-1234567890abcdef-01`,
+      [TRACEPARENT_HEADER]: `00-${TRACE}-1234567890abcdef-00`,
       [CAIL_REQUEST_ID_HEADER]: RID,
     });
     expect(outboundCorrelationHeaders(c)).not.toHaveProperty("x-request-id");
@@ -324,6 +384,7 @@ describe("L7 outbound headers", () => {
     const good: CailCorrelation = {
       trace_id: TRACE,
       span_id: PARENT_SPAN,
+      trace_flags: 1,
       request_id: RID,
     };
     const bad: Array<Partial<CailCorrelation> | null> = [
@@ -333,6 +394,8 @@ describe("L7 outbound headers", () => {
       { ...good, trace_id: "short" },
       { ...good, span_id: "0".repeat(16) },
       { ...good, span_id: "xyz" },
+      { ...good, trace_flags: 2 as never },
+      { ...good, trace_flags: undefined as never },
       { ...good, request_id: "has spaces" },
       { ...good, request_id: "" },
       { ...good, request_id: undefined as never },

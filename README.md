@@ -1,266 +1,365 @@
 # @cuny-ai-lab/cail-log
 
-The CAIL structured logger. One wide event (canonical log line) per unit of
-work, emitted as a single JSON object — shaped so coding agents can query the
-fleet's logs, and shaped so that **logging user content or secrets is
-structurally impossible**. This is the logging half of the fleet's
-zero-retention promise: the safe-to-log allowlist is a *type*, there is no
-free-text parameter, and everything else is dropped or masked before the sink.
+`cail-log` is CAIL's pre-release operational event primitive. It emits small,
+privacy-constrained lifecycle and diagnostic events in Cloudflare Workers,
+browsers, Bun, and Node 20 or newer.
 
-Pure ECMAScript + Web Crypto (`crypto.getRandomValues`, `crypto.randomUUID`) —
-the same source runs unchanged in the **browser**, **Cloudflare Workers**, and
-**Node ≥20**. Zero runtime dependencies; the package is logic only and safe to
-be public.
+The record is aligned with the OpenTelemetry Logs Data Model and semantic
+conventions. It is not an OpenTelemetry SDK or an OTLP exporter. Collection,
+sampling, retention, export, and dashboards remain separate concerns.
 
-## Who needs this
+## Guarantees
 
-Every CAIL fleet service and tool that logs anything: the model proxy, the key
-service, the studios, deployed tools. If a repo currently calls a console
-method with request data, it should call this instead. The portable default
-emits one NDJSON line. Cloudflare Workers pass `workersStructuredSink` so
-Workers Logs receives the sanitized object directly, indexes its fields, and
-retains native severity. Collection, retention, and OpenTelemetry export remain
-Cloudflare configuration rather than application code; this library's job is
-that **nothing unsafe can be emitted in the first place**.
+- Event names come from a catalog that defines one structure per event.
+- Event bodies, source profiles, severity policies, required fields, and
+  optional fields are catalog-owned rather than call arguments.
+- Event fields are narrowed in TypeScript and validated again at runtime.
+- Service identity and deployment environment are constructor-owned resource
+  attributes.
+- Tenant loggers cannot claim platform identity, application, project, model,
+  cost, cohort, user, or quota facts.
+- A malformed, missing, contradictory, or known-but-disallowed field drops the
+  event with a content-free diagnostic instead of creating a weaker event.
+- Unknown arbitrary keys are ignored and never become log content.
+- Logging and diagnostic failures do not throw into the application path.
+- Sink selection is explicit. The Cloudflare sink emits one structured,
+  queryable JSON object; the JSON-line sink is a separate deliberate choice.
+
+These rules close common free-text channels. They cannot prove the semantic
+origin of every valid machine identifier. Trusted platform callers still have
+to classify values correctly and must not place personal data in fields such
+as model, key, cohort, or project identifiers.
 
 ## Install
 
-Consumed as a public git dependency. The package commits its build output, so
-it resolves with no build step:
+Pin a reviewed commit while the package remains below `1.0.0`:
 
 ```bash
-bun add github:CUNY-AI-Lab/cail-log
-# or
-npm install github:CUNY-AI-Lab/cail-log
+bun add github:CUNY-AI-Lab/cail-log#<commit>
 ```
 
-Pin to a tag or commit for reproducibility.
+The repository commits `dist`, so consumers do not need a package build step.
 
-## Quick start — a Worker request boundary
+## Create a logger
 
 ```ts
 import {
-  createCailLogger,
-  correlationFromHeaders,
-  outboundCorrelationHeaders,
+  CAIL_EVENT_CATALOG,
   CAIL_EVENTS,
+  createCailLogger,
   workersStructuredSink,
 } from "@cuny-ai-lab/cail-log";
 
 const log = createCailLogger({
-  service: "model-proxy",
-  release: env.RELEASE,     // e.g. short commit SHA
-  env: "prod",
+  service: "sandbox-bridge",
+  release: "218328f",
+  env: "production",
+  sourceClass: "platform",
+  catalog: CAIL_EVENT_CATALOG,
   sink: workersStructuredSink,
 });
 
-export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    // Adopt the gateway's ids; mint only if this service was hit directly.
-    const corr = correlationFromHeaders(request);
-    const started = Date.now();
-
-    log.info(CAIL_EVENTS.REQUEST_RECEIVED, {
-      ...corr,
-      http_method: request.method,
-      route: "/v1/run",             // the CLASSIFIED route, never a raw URL
-    });
-
-    const upstream = await fetch(upstreamUrl, {
-      headers: { ...outboundCorrelationHeaders(corr) },  // forward the trace
-      // ...
-    });
-
-    log.info(CAIL_EVENTS.REQUEST_COMPLETED, {
-      ...corr,
-      subject,                      // the X-CAIL-Subject HMAC — never email
-      app,
-      model,
-      route: "/v1/run",
-      http_method: "POST",
-      status: upstream.status,
-      outcome: upstream.ok ? "ok" : "error",
-      duration_ms: Date.now() - started,
-      input_tokens,
-      output_tokens,
-      quota: { state: "ok", remaining, used },
-    });
-
-    return response;
+log.emit(CAIL_EVENTS.SANDBOX_USAGE_SETTLED, {
+  usage_id: "8b9ec144-39aa-4f1f-bda5-4c645facf2cd",
+  action_id: "9f50d4a4-ef70-41b2-b225-0a5cbf2df5e7",
+  product_id: "kale-workbench",
+  principal: {
+    type: "user",
+    subject: "cail-0123456789abcdef0123456789abcdef",
   },
-};
-```
-
-A Durable Object op is the same shape — reuse the correlation you adopted at
-the request boundary and log one event per op:
-
-```ts
-log.info(CAIL_EVENTS.QUOTA_CHARGED, {
-  ...corr,
-  subject,
-  outcome: "ok",
-  duration_ms,
-  quota: { state: "ok", remaining, used },
-});
-
-log.error(CAIL_EVENTS.UPSTREAM_ERROR, {
-  ...corr,
-  subject,
-  status: 502,
-  outcome: "error",
-  error_code: "upstream_5xx",
-  retry_count: 1,
+  terminal: { outcome: "ok", reason: "completed" },
+  usage: {
+    kind: "sandbox_compute",
+    unit: "mib_milliseconds",
+    quantity: 67_108_864,
+  },
 });
 ```
 
-## The by-construction guarantee
+The catalog narrows the event name, required fields, optional fields, source
+profile, and severity. An untyped unknown name emits `event.invalid` with the
+fixed body `Event name rejected.` The rejected value is not echoed. Applications
+may define additional events with `defineEventCatalog`, but each definition must
+declare the same contract components; a name is never just a message string.
+The `cail.*` namespace is reserved for the canonical library catalog so a
+consumer cannot redefine a shared fleet event with a different structure.
+Use `extendCailEventCatalog()` when one logger needs both canonical fleet events
+and service-local events. Logger construction rejects catalog-shaped objects
+that did not pass one of these definition functions.
 
-There is **no argument you can pass a prompt into**:
+### Canonical fleet events
 
-- the fields parameter is the typed allowlist struct (`CailLogFields`) —
-  `message`, `prompt`, `email`, … are compile errors, and any key smuggled
-  past the compiler is dropped at runtime;
-- the `event` parameter is a closed-vocabulary slug
-  (`/^[a-z0-9][a-z0-9_.-]{0,63}$/`) — free text is replaced with
-  `"event.invalid"` and never echoed;
-- the emitted `message` is derived from a static, library-owned lookup on
-  `event` (+ `error_code`) — never from caller input;
-- string values are control-character-stripped (C0, DEL, the C1 block incl.
-  NEL, and U+2028/U+2029 — no log-line injection, even through a non-JSON
-  sink) and truncated to 256 chars; numbers must be finite; enums are exact.
+| Event | Required semantic core |
+|---|---|
+| `cail.action.admitted` | action, product, principal |
+| `cail.action.terminal` | action, product, principal, outcome/reason, duration |
+| `cail.request.received` | request, product, HTTP method, route template |
+| `cail.request.completed` | request, product, HTTP facts, outcome/reason, duration |
+| `cail.auth.denied` | request, product, principal, HTTP facts, denied outcome |
+| `cail.quota.charged` | product, principal, successful outcome, quota snapshot |
+| `cail.upstream.error` | request, product, failed outcome, safe error type |
+| `cail.model.call.admitted` | call, action, product, principal, provider, requested model |
+| `cail.model.call.terminal` | admitted-call fields plus outcome/reason and duration |
+| `cail.sandbox.usage.settled` | usage, product, principal, successful outcome, exact usage |
 
-The suite proves it with a canary: `CANARY-PII-7f3a` is pushed at the logger
-through every avenue the API exposes and asserted absent from every emitted
-byte.
+The exported TypeScript type is the exact field-level contract. This table is
+an orientation aid, not a second schema.
 
-## The wide-event schema
+## Record shape
 
-Each call emits exactly ONE flat JSON object (Workers Logs indexes each key).
-Absent fields are omitted. All identity is the pseudonymous `X-CAIL-Subject`
-HMAC — never email, names, or the raw OIDC `sub`.
+The portable sink receives an OpenTelemetry-aligned record:
 
-| Field | Type | Meaning |
-|---|---|---|
-| `timestamp` | string | ISO-8601 UTC (injectable clock) |
-| `severity_text` | string | `TRACE`/`DEBUG`/`INFO`/`WARN`/`ERROR`/`FATAL` |
-| `severity_number` | number | OTel: 1/5/9/13/17/21 — failures are `>= 17` |
-| `event` | string | Closed-vocabulary slug (see `CAIL_EVENTS`) |
-| `message` | string | Library-derived from `event`+`error_code`; never caller input |
-| `service` | string | Service slug (constructor-bound; slug-validated) |
-| `release` | string | Release id (e.g. short SHA) |
-| `env` | string | `prod` / `staging` / … |
-| `subject` | string | The `X-CAIL-Subject` HMAC |
-| `request_id` | string | Fleet request id — shape-enforced (`[A-Za-z0-9._-]{1,128}`) |
-| `trace_id` / `span_id` | string | W3C Trace Context ids — shape-enforced (32/16 lowercase hex) |
-| `principal_type` | `"user"｜"app"` | Which principal spent |
-| `key_id` | string | API-key id (never the key) |
-| `app` | string | The validated `X-CAIL-App` slug — slug-enforced |
-| `http_method` | string | Request method — shape-enforced (1–16 uppercase letters) |
-| `route` | string | The CLASSIFIED route label, never a raw URL with query |
-| `model` | string | Model id |
-| `status` | number | HTTP status |
-| `outcome` | `"ok"｜"client_error"｜"error"｜"denied"` | Normalized verdict |
-| `duration_ms` / `upstream_ms` | number | Timings |
-| `error_code` | string | Stable machine code (slug), e.g. `quota_exceeded` |
-| `retry_count` | number | Retries performed |
-| `req_bytes` / `resp_bytes` | number | Sizes, never contents |
-| `input_tokens` / `output_tokens` | number | Token counts, never tokens |
-| `quota` | object | `{ state: "ok"｜"stale", remaining, used }` |
-
-**Standard events** (`CAIL_EVENTS`): `request.received`, `request.completed`,
-`auth.denied`, `quota.charged`, `upstream.error`. Tool-specific slugs are
-allowed; their `message` stays the generic `"Event recorded."`.
-
-## SAFE-TO-LOG vs NEVER-LOG
-
-**Safe (the allowlist above — everything else does not exist to this API):**
-subject HMAC, correlation ids, service/release/env, principal type, key id,
-app slug, method, classified route, model id, status, outcome, durations,
-stable error codes, retry counts, byte and token COUNTS, quota meter state.
-
-**Never (denylisted defense-in-depth, on top of the types):**
-prompts / completions / streamed tokens / `messages` / `content` / `input` /
-`output`; file contents or filenames; `email`, `given_name`, `family_name`,
-raw OIDC `sub`; `authorization`, `cookie`, `set-cookie`, `token`, `secret`,
-`password`, `api_key`; any `x-cail-*` header value except the subject and
-request-id carriers; full bodies or header dumps. `redactLogEvent()` (applied
-automatically before every sink call, and exported for raw pipelines) masks
-any such key to `"[REDACTED]"`, drops everything not on the allowlist, and
-polices VALUES too — a nested object, array, or oversized blob under a
-safe-looking key is dropped or truncated, never forwarded.
-
-## The contract — 7 invariants
-
-Weakening any of these is a **major** semver bump every consumer opts into.
-
-| # | Invariant |
-|---|-----------|
-| L1 | **Typed allowlist only.** The log API accepts only `CailLogFields`. Unknown keys are dropped at runtime; adding a field requires editing the type (forced review). Wrong-typed values are dropped, never coerced; strings are control-char-stripped and truncated. |
-| L2 | **No caller-supplied free text.** No `message` parameter exists. `event` must be a slug or becomes `"event.invalid"`; the emitted `message` comes only from a static library-owned lookup. |
-| L3 | **Severity.** `fatal/error/warn/info/debug/trace` → OTel `severity_number` 21/17/13/9/5/1 + uppercase `severity_text`. Failures are a numeric filter (`>= 17`). An unknown level from an untyped caller coerces UP to `fatal` (21), never down — a miscategorized failure is never hidden below the failure filter. |
-| L4 | **One wide event per call**, via an injectable sink. The portable default emits one NDJSON line through `console.log`; `workersStructuredSink` passes the object through Cloudflare's native severity console method. Timestamp is ISO-8601 UTC from an injectable clock. The logger **never throws**; a throwing sink drops the event with a fixed, content-free `console.error` note. Construction fails loud (`TypeError`) on invalid config. |
-| L5 | **`Sensitive<T>`.** `sensitive(v)` makes `toString`/`toJSON`/inspect/interpolation all yield `"[REDACTED]"`. Known gap: deliberately unwrapping `.value`. |
-| L6 | **Defense-in-depth denylist.** `redactLogEvent` runs on every final object: denylisted keys masked, non-allowlist keys dropped, `quota` policed, `Sensitive` values masked, and every surviving value held to its allowlisted shape — guarding the raw-object path and future drift. |
-| L7 | **Adopt, never regenerate.** `correlationFromHeaders` adopts a valid inbound `traceparent` trace-id and `X-CAIL-Request-Id` verbatim, minting fresh ids only when genuinely absent or malformed (version-00 `traceparent` must have exactly four fields; a new span id is minted per hop — that is this service's own span). `X-CAIL-Request-Id` is the sole inter-service request-id carrier. The OpenAI-compatible `x-request-id` header is a response-only alias that HTTP boundaries may echo with the same value; this library neither adopts nor forwards that alias. Outbound trace-flags are deliberately always `01` (the fleet logs every request; sampling happens at the sink). An inbound `tracestate` riding a VALID `traceparent` is carried opaquely — never parsed, reordered, or invented — after minimal structural validation (printable ASCII, ≤512 chars, 1–32 `key=value` members; malformed → dropped fail-closed, and tracestate without a valid traceparent is dropped per spec), and `outboundCorrelationHeaders` forwards it verbatim (W3C Trace Context §3.3: a vendor that continues the trace must send `tracestate` on outgoing requests). `outboundCorrelationHeaders` produces the `traceparent` + `X-CAIL-Request-Id` pair (+ the carried `tracestate`, if any) to forward; it throws `TypeError` on malformed input rather than silently forking a trace. |
-
-## Signature
-
-```ts
-createCailLogger(options: {
-  service: string;              // required slug
-  release?: string;
-  env?: string;
-  sink?: (event: CailLogEvent) => void;  // default: one portable NDJSON console.log line
-  clock?: () => number;         // epoch ms; default Date.now
-}): CailLogger
-
-workersStructuredSink(event: CailLogEvent): void // Cloudflare Workers Logs
-
-interface CailLogger {
-  log(level: "fatal"|"error"|"warn"|"info"|"debug"|"trace", event: string, fields?: CailLogFields): void;
-  fatal(event: string, fields?: CailLogFields): void;
-  error(event: string, fields?: CailLogFields): void;
-  warn(event: string, fields?: CailLogFields): void;
-  info(event: string, fields?: CailLogFields): void;
-  debug(event: string, fields?: CailLogFields): void;
-  trace(event: string, fields?: CailLogFields): void;
+```json
+{
+  "schema_version": 1,
+  "timestamp": "2026-07-13T16:00:00.000Z",
+  "severity_text": "INFO",
+  "severity_number": 9,
+  "event_name": "cail.sandbox.usage.settled",
+  "body": "Sandbox usage settled.",
+  "resource": {
+    "service.namespace": "cuny-ai-lab",
+    "service.name": "sandbox-bridge",
+    "service.version": "218328f",
+    "deployment.environment.name": "production"
+  },
+  "attributes": {
+    "cail.source.class": "platform",
+    "cail.product.id": "kale-workbench",
+    "cail.usage.id": "8b9ec144-39aa-4f1f-bda5-4c645facf2cd",
+    "cail.usage.kind": "sandbox_compute",
+    "cail.usage.unit": "mib_milliseconds",
+    "cail.usage.quantity": 67108864
+  }
 }
-
-sensitive<T>(value: T): Sensitive<T>       // .value is the one (documented) unwrap
-isSensitive(value: unknown): boolean
-redactLogEvent(obj: Record<string, unknown>): Record<string, unknown>
-
-correlationFromHeaders(source: Headers | { headers: Headers }):  // structural — any { get(name) }
-  { trace_id: string; span_id: string; request_id: string; tracestate?: string }
-outboundCorrelationHeaders(corr):
-  { traceparent: string; "x-cail-request-id": string; tracestate?: string }  // tracestate only if carried
-
-CAIL_EVENTS            // the standard event slugs
-CAIL_SEVERITY_NUMBER   // the L3 mapping
-TRACEPARENT_HEADER, TRACESTATE_HEADER, CAIL_REQUEST_ID_HEADER
 ```
 
-The public `.d.ts` uses plain `string`/`number`/object types only — the
-header reader is a structural `{ get(name: string): string | null }`, so no
-ambient `DOM`/Workers types leak out.
+`severity_number` uses the OpenTelemetry bands `1`, `5`, `9`, `13`, `17`, and
+`21` for trace through fatal. Static severity is catalog-owned. Outcome events
+use one closed mapping: success and cancellation are `INFO`; client error,
+denial, and unknown outcome are `WARN`; error and timeout are `ERROR`. Attribute
+values are scalar strings, numbers, or booleans. Nested application objects and
+arbitrary content are not accepted.
+
+`workersStructuredSink` projects this record into one flat JSON object. For
+example, `resource["service.name"]` becomes the top-level key `service.name`.
+Cloudflare Workers Logs can then filter, group, and aggregate those fields
+without making Cloudflare's storage format the portable package contract.
+
+This sink constrains custom console events only. Cloudflare separately creates
+invocation logs, which can contain request URL and response metadata. A
+production pilot must either set `observability.logs.invocation_logs` to
+`false` or explicitly approve the native fields, retention, access, and
+purpose. The choice belongs in deployment configuration, not this package.
+
+## Field mapping
+
+Callers use short input names; emitted attributes use established semantic
+conventions when one exists.
+
+| Input | Emitted attribute | Profile |
+|---|---|---|
+| `request_id` | `cail.request.id` | both |
+| `action_id` | `cail.action.id` | both |
+| `call_id` | `cail.call.id` | both |
+| `usage_id` | `cail.usage.id` | platform |
+| `http_method` | `http.request.method` | both |
+| `route` | `url.template` | both |
+| `status` | `http.response.status_code` | both |
+| `trace.trace_id` | log-record `trace_id` | both |
+| `trace.span_id` | log-record `span_id` | both |
+| `trace.trace_flags` | log-record `trace_flags` | both |
+| `terminal.outcome` | `cail.outcome` | both |
+| `terminal.reason` | `cail.outcome.reason` | both |
+| `error_type` | `error.type` | both |
+| `req_bytes` | `http.request.body.size` | both |
+| `resp_bytes` | `http.response.body.size` | both |
+| `principal.type` | `cail.principal.type` | platform |
+| `principal.subject` | `enduser.pseudo.id` | platform |
+| `cohort` | `cail.cohort.id` | platform |
+| `product_id` | `cail.product.id` | platform |
+| `project` | `cail.kale.project.name` | platform |
+| `provider` | `gen_ai.provider.name` | platform |
+| `request_model` | `gen_ai.request.model` | platform |
+| `response_model` | `gen_ai.response.model` | platform |
+| `input_tokens` | `gen_ai.usage.input_tokens` | platform |
+| `output_tokens` | `gen_ai.usage.output_tokens` | platform |
+| `cost_micro_usd` | `cail.gen_ai.cost.micro_usd` | platform |
+| `usage.kind` | `cail.usage.kind` | platform |
+| `usage.unit` | `cail.usage.unit` | platform |
+| `usage.quantity` | `cail.usage.quantity` | platform |
+
+HTTP methods use the OpenTelemetry known-method vocabulary plus `_OTHER`.
+Routes must be templates such as `/users/{user_id}`, never raw request paths or
+URLs, and are capped at 160 characters. Product outcome is explicit and does
+not derive from HTTP status, so an application failure returned in an HTTP 200
+response remains visible. Outcome and terminal reason must be coherent: for
+example, `ok` pairs with `completed`, while `timeout` pairs with `timeout`.
+`error.type` on an `ok` event is a contract error rather than a silently
+corrected record.
+
+`principal`, `trace`, and `terminal` are atomic input facts. Their nested,
+discriminated types prevent partial or contradictory combinations before
+runtime: identified users and canaries require a pseudonymous subject;
+anonymous, app, and service principals cannot carry one; trace context is
+all-or-nothing; and each outcome accepts only its closed reason set. The sink
+still emits scalar OpenTelemetry-aligned record fields and attributes.
+
+`service.name` is the emitting component. `product_id` is trusted per-event
+attribution for a fleet product such as Workbench or Site Studio. `project` is
+only a Kale Deploy tenant project. Shared gateways must not conflate these
+three scopes.
+
+The canonical subject shape is `cail-` plus 32 lowercase hexadecimal
+characters. It is pseudonymous, not anonymous: a stable pseudonym can still be
+linkable personal data. Prefer a coarse, policy-defined `cohort` when a
+per-person view is not necessary.
+
+## Quotas
+
+Quota input contains `kind`, its matching `unit`, `state`, `limit`, `used`, and
+an ISO-8601 reset timestamp. The logger derives `remaining` as
+`max(limit - used, 0)` and emits scalar `cail.quota.*` attributes.
+
+```ts
+log.emit(CAIL_EVENTS.QUOTA_CHARGED, {
+  product_id: "kale-workbench",
+  principal: {
+    type: "user",
+    subject: "cail-0123456789abcdef0123456789abcdef",
+  },
+  terminal: { outcome: "ok", reason: "completed" },
+  quota: {
+    kind: "model_spend",
+    unit: "micro_usd",
+    state: "fresh",
+    limit: 10_000_000,
+    used: 188_977,
+    reset_at: "2026-08-12T16:00:00.000Z",
+  },
+});
+```
+
+Valid pairs are `model_spend`/`micro_usd`, `request_count`/`requests`,
+`build_count`/`builds`, `storage`/`bytes`, `compute`/`milliseconds`, and
+`sandbox_compute`/`gib_seconds`.
+
+## Settled usage
+
+Quota is a window snapshot; settled usage is an immutable measured occurrence.
+The canonical `cail.sandbox.usage.settled` event requires a platform-minted
+`usage_id`, trusted product and principal attribution, and exact integer
+`sandbox_compute`/`mib_milliseconds`. A quota snapshot may accompany it.
+
+The log is not the charge authority. SandboxMeter settlement and durable
+accounting ingestion happen first. The event is emitted only after accounting
+acknowledges the idempotent usage fact.
+
+The source settlement may mint `usage_id` before accounting delivery succeeds,
+so the same ID can correlate bounded outbox retries. Those retries use a
+service-local event such as `sandbox_bridge.outbox.delivery_failed`, defined
+with `extendCailEventCatalog()`. They must not emit
+`cail.sandbox.usage.settled` or otherwise claim accounting acknowledgement.
+
+## Correlation
+
+`request_id` identifies one HTTP request. `action_id` identifies a user-facing
+workflow attempt that can span requests, retries, model calls, and sandbox
+work. `call_id` identifies one billable child call. `usage_id` identifies one
+immutable source settlement fact, such as sandbox compute, and may correlate
+its idempotent accounting-delivery retries. The canonical settled log event
+additionally means the accounting service acknowledged that fact.
+All four use lowercase UUID v4 values. A trusted boundary must mint action,
+call, and usage IDs;
+tenant-supplied identifiers are diagnostic hints until a collector validates
+their provenance.
+
+`correlationFromHeaders()` accepts `Headers`, a Request-like `{ headers }`, or
+a structural `{ get(name) }` reader. It adopts a valid W3C trace, creates a new
+span for the current hop, and adopts or mints a lowercase UUID v4
+`X-CAIL-Request-Id`.
+
+```ts
+const correlation = correlationFromHeaders(request.headers, {
+  sampled: span.isTraced,
+});
+
+log.emit(CAIL_EVENTS.ACTION_ADMITTED, {
+  action_id: "9f50d4a4-ef70-41b2-b225-0a5cbf2df5e7",
+  product_id: "kale-workbench",
+  principal: { type: "anonymous" },
+  request_id: correlation.request_id,
+  trace: correlation,
+});
+```
+
+If `sampled` is omitted, an inbound sampled decision is preserved; a new trace
+defaults to `0`, as required for a deferred decision. The helper never invents
+a sampled decision. `outboundCorrelationHeaders()` validates the correlation
+and writes the matching `traceparent`, request ID, and normalized `tracestate`.
+W3C-valid empty `tracestate` list members are accepted and removed; an entirely
+empty value is not forwarded.
+
+## Diagnostics and sensitive values
+
+The optional `onDiagnostic` callback receives one closed code: `clock_error`,
+`event_contract_error`, `event_invalid`, `event_dropped`, or `sink_error`. It
+never receives the original error or event content.
+
+The logger contains synchronous throws and rejected promise-like returns from
+both sinks and diagnostic callbacks. It does not await asynchronous delivery.
+A Cloudflare sink that performs I/O must synchronously register that promise
+with `ExecutionContext.waitUntil()` so the runtime keeps it alive; returning a
+promise to `cail-log` only gives the library a rejection to contain.
+
+This fire-and-forget behavior means `cail-log` is not an accounting ledger and
+cannot prove that every admitted action reached a terminal state. The durable
+action/call store is authoritative; log events are diagnostic projections of
+admission and terminal transitions.
+
+`sensitive(value)` wraps a secret so string conversion, JSON serialization,
+template interpolation, and Node inspection produce `[REDACTED]`. A wrapper in
+an allowed event field causes a content-free contract failure and drops the
+event. Deliberately reading `.value` unwraps the secret for application use.
+
+## Standards position
+
+The core contract is pinned for this candidate to OpenTelemetry semantic
+conventions `1.43.0`. GenAI attributes are pinned to
+`open-telemetry/semantic-conventions-genai` commit
+`63f8200eee093730ce845d26ce2aafb621b0807e`; that project currently has no
+published release or schema URL. An upgrade is an explicit schema review, not
+an automatic rename.
+
+The contract follows the
+[OpenTelemetry Logs Data Model](https://opentelemetry.io/docs/specs/otel/logs/data-model/),
+[OpenTelemetry semantic conventions](https://opentelemetry.io/docs/specs/semconv/),
+and the [W3C Trace Context Recommendation](https://www.w3.org/TR/trace-context/).
+The Cloudflare projection follows
+[Workers Logs structured JSON guidance](https://developers.cloudflare.com/workers/observability/logs/workers-logs/).
+Privacy and failure behavior follow the
+[OWASP Logging Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html).
+
+Semantic conventions evolve, especially GenAI attributes. A future convention
+change requires an explicit schema decision; the package will not silently
+rename emitted fields.
 
 ## Development
 
 ```bash
 bun install
-bun run typecheck   # tsc: build config (clean public surface) + test config (incl. @ts-expect-error type-level assertions)
-bun run build       # emit dist/ (JS + .d.ts) — committed so git-deps resolve
-bun run test        # Vitest — the invariant suite IS the contract
+bun test
+bun run typecheck
+bun run build
 ```
 
-## Scope
+The suite covers the record envelope, Cloudflare projection, closed event
+catalogs, trust profiles, quota consistency, hostile inputs, failure
+containment, W3C propagation, and a PII-shaped canary attempted through every
+runtime field.
 
-**In (v1):** the wide-event schema, the typed allowlist logger, the portable
-NDJSON sink, the explicit Workers structured sink, the derived message,
-`Sensitive<T>`, the denylist sweep, and the TS adopt-or-mint correlation
-helpers. **Out:** collection and retention (Workers Logs, OpenTelemetry export,
-or Logpush configuration), the gateway's Lua-side correlation minting, and
-each repo's adoption.
+See [DESIGN.md](DESIGN.md) for the design gate, boundaries, pilot requirements,
+and rollback plan.
 
 ## License
 
