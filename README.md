@@ -6,7 +6,10 @@ browsers, Bun, and Node 20 or newer.
 
 The record is aligned with the OpenTelemetry Logs Data Model and semantic
 conventions. It is not an OpenTelemetry SDK or an OTLP exporter. Collection,
-sampling, retention, export, and dashboards remain separate concerns.
+sampling, retention, export, and dashboards remain separate concerns. The
+package includes deterministic projections for Cloudflare Workers Logs and
+Workers Analytics Engine so every producer uses the same field positions; the
+storage products still own delivery, sampling, retention, and querying.
 
 ## Guarantees
 
@@ -24,6 +27,8 @@ sampling, retention, export, and dashboards remain separate concerns.
 - Logging and diagnostic failures do not throw into the application path.
 - Sink selection is explicit. The Cloudflare sink emits one structured,
   queryable JSON object; the JSON-line sink is a separate deliberate choice.
+- `fanoutSinks()` invokes every selected sink even if another fails, so a
+  diagnostic destination cannot suppress the fleet-analytics projection.
 
 These rules close common free-text channels. They cannot prove the semantic
 origin of every valid machine identifier. Trusted platform callers still have
@@ -151,6 +156,58 @@ invocation logs, which can contain request URL and response metadata. A
 production pilot must either set `observability.logs.invocation_logs` to
 `false` or explicitly approve the native fields, retention, access, and
 purpose. The choice belongs in deployment configuration, not this package.
+
+### Fleet analytics projection
+
+Cloudflare Workers Logs is a short-lived diagnostic surface and does not expose
+a programmatic query API for the fleet console's aggregate trends. The optional
+Analytics Engine projection writes the same accepted event to the versioned
+`cail_fleet_events_v1` dataset:
+
+```ts
+import {
+  createAnalyticsEngineSink,
+  fanoutSinks,
+  workersStructuredSink,
+} from "@cuny-ai-lab/cail-log";
+
+const sink = fanoutSinks(
+  workersStructuredSink,
+  createAnalyticsEngineSink(env.CAIL_FLEET_EVENTS),
+);
+```
+
+`toAnalyticsEngineDataPoint()` owns the complete ordered-column projection.
+`CAIL_ANALYTICS_ENGINE_BLOBS` and `CAIL_ANALYTICS_ENGINE_DOUBLES` publish the
+one-based positions used by queries. Missing strings are empty; missing
+nonnegative numeric facts use `CAIL_ANALYTICS_ENGINE_MISSING_NUMBER` (`-1`), so
+zero never means unknown. The point index is deployment environment plus
+trusted `product_id`, with a namespaced service fallback for service-local
+events. This prevents noisy test or staging traffic from sharing a production
+sampling boundary.
+
+The fleet projection intentionally omits quota values, stable user pseudonyms,
+per-event UUIDs, usage facts, and Kale tenant-project identity. Model-limit
+state and Sandbox allocation come from their authoritative accounting APIs;
+identifiable user reads are audited and resolved there on demand. Kale tenant
+state comes from its control plane. The aggregate projection retains the
+privacy-safer cohort. Blob positions 16–20 and double positions 14–20 are
+reserved for append-only schema growth.
+
+Analytics Engine is diagnostic only. It may sample, retains data for its native
+platform window, and cannot replace authoritative product state, model
+accounting, or Sandbox accounting. Weighted aggregate success/error/latency
+queries use `_sample_interval` and expose sampling evidence. Exact lifecycle
+pairing, duplicates, missing terminals, and individual event sequences require
+a product-owned durable state store; Analytics Engine cannot prove them even
+when the observed sample interval is one.
+
+The adapter writes one point for each accepted event. Cloudflare currently
+allows 250 Analytics Engine points per Worker invocation; the exported
+`CAIL_ANALYTICS_ENGINE_MAX_POINTS_PER_INVOCATION` constant lets producer
+adapters enforce that platform ceiling. Canonical producers emit a bounded
+number of lifecycle events per invocation and must not use `cail-log` as a
+bulk-event transport.
 
 ## Field mapping
 

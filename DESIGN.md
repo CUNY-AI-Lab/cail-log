@@ -13,8 +13,9 @@ CAIL-specific facts use the `cail.*` namespace.
 
 The package does not claim OTLP compliance. It does not implement an
 OpenTelemetry SDK, batch processor, exporter, collector, or sampling system.
-The Cloudflare sink flattens a valid portable record into a structured JSON
-object for Workers Logs. This projection is an adapter, not the core schema.
+The Cloudflare sinks project a valid portable record into a structured JSON
+object for Workers Logs or a versioned positional point for Workers Analytics
+Engine. These projections are adapters, not the core schema.
 
 The package is pre-release. Existing source integrations are prototypes, not
 compatibility obligations. The intended first production schema begins at
@@ -57,7 +58,35 @@ event with a conflicting structure.
 The public logger has one `emit(event, fields)` operation. Severity is part of
 the event definition rather than a caller-controlled method name. Sink choice
 is explicit: Workers use the structured-object sink, while line-oriented Node
-or Bun processes may deliberately choose the JSON-line sink.
+or Bun processes may deliberately choose the JSON-line sink. `fanoutSinks`
+contains each destination independently and invokes all configured sinks before
+reporting one content-free sink failure to the logger.
+
+The Analytics Engine schema is a load-bearing query contract. Blob and double
+positions are append-only and exported as one-based constants. Missing numeric
+facts use `-1`, which is outside every accepted nonnegative CAIL measurement;
+queries must exclude it rather than treating it as zero. Deployment environment
+plus trusted product ID is the sampling index. Service-local events use a
+namespaced service fallback.
+The projection deliberately omits trace IDs and any field outside the
+catalog-approved scalar attributes.
+
+Quota values are absent from this diagnostic projection because their meaning
+requires the complete kind/unit/state/reset tuple and the authoritative model
+limit lives in accounting. Stable user pseudonyms, per-event UUIDs, usage IDs,
+and Kale tenant-project identity also stay in their authoritative stores. The
+projection retains the privacy-safer cohort and reserves unused blob/double
+positions for append-only growth rather than consuming the provider's entire
+positional schema in v1.
+
+Analytics Engine supports weighted aggregate operational trends. It does not
+guarantee individual record retention, and a sample interval of one does not
+prove lossless delivery. Exact action/request pairing, missing/duplicate event
+checks, and workflow success gates therefore remain product-durable-state
+responsibilities rather than Analytics Engine claims. Each accepted event
+projects to one point, so producers must also remain below Cloudflare's current
+250-points-per-invocation platform limit; this library publishes that ceiling
+but does not maintain mutable invocation-global counters.
 
 Fleet identity has three distinct scopes. `service.name` is the constructor-
 owned emitting component, `cail.product.id` is trusted per-event product
@@ -138,6 +167,9 @@ The trust profiles are:
    failures, including rejected promise-like returns, never throw into
    application work. Asynchronous I/O remains the sink's lifecycle
    responsibility; Workers sinks must register it with `waitUntil()`.
+   A fanout sink attempts every configured destination and reports destination
+   failure without letting one destination prevent another from receiving the
+   event.
 10. W3C trace flags preserve or explicitly reflect a recording decision. A new
     trace defaults to unsampled; the library never hardcodes sampled.
 11. `tracestate` is processed only with a valid `traceparent`. Valid empty list
@@ -193,9 +225,12 @@ Before a production pilot:
 - complete an independent fresh-context review;
 - pass tests, typecheck, build, package-content inspection, and secret scan;
 - confirm the GenAI semantic convention version to pin;
-- decide whether person-level pseudonyms are needed in the pilot;
-- decide the initial event and route catalogs for the gateway;
-- approve the durable action-attempt/call state machine and conflict behavior;
+- verify the cohort-only Analytics Engine projection contains no stable user
+  pseudonym or per-event identifier;
+- validate each producer's bounded event count against the exported Analytics
+  Engine invocation ceiling;
+- implement the product-owned durable action-attempt/call state needed for
+  exact workflow reporting;
 - add compile-only fixtures for each intended platform consumer;
 - publish a versioned runtime schema and collector golden fixtures;
 - make trusted or collector-derived product attribution a golden-fixture
