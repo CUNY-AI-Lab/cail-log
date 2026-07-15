@@ -9,7 +9,6 @@ import {
 const CANARY = "stephen.zweibel@gc.cuny.edu?CANARY-PII-7f3a";
 const EVENTS = defineEventCatalog({
   "test.canary": {
-    body: "Canary test.",
     source: "platform",
     severity: "info",
     required: [],
@@ -25,7 +24,7 @@ describe("privacy canary", () => {
     const diagnostics: string[] = [];
     const logger = createCailLogger({
       service: "model-proxy", release: "local", env: "test",
-      sourceClass: "platform", catalog: EVENTS,
+      sourceClass: "platform", subjectVersion: "v1", catalog: EVENTS,
       sink: (event) => events.push(event),
       onDiagnostic: (code) => diagnostics.push(code),
     });
@@ -115,7 +114,7 @@ describe("privacy canary", () => {
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const logger = createCailLogger({
       service: "model-proxy", release: "local", env: "test",
-      sourceClass: "platform", catalog: EVENTS,
+      sourceClass: "platform", subjectVersion: "v1", catalog: EVENTS,
       sink: () => { throw new Error(CANARY); },
       onDiagnostic: () => { throw new Error(CANARY); },
     });

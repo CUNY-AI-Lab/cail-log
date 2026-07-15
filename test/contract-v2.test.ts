@@ -21,6 +21,7 @@ function capture() {
     release: "218328f",
     env: "production",
     sourceClass: "platform",
+    subjectVersion: "v1",
     catalog: CAIL_EVENT_CATALOG,
     sink: (event) => events.push(event),
     onDiagnostic: (code) => diagnostics.push(code),
@@ -31,7 +32,7 @@ function capture() {
 
 afterEach(() => vi.restoreAllMocks());
 
-describe("schema v1 and closed event definitions", () => {
+describe("schema v2 and closed event definitions", () => {
   it("emits the immutable canonical envelope", () => {
     const { events, logger } = capture();
     logger.emit(CAIL_EVENTS.ACTION_ADMITTED, {
@@ -39,10 +40,10 @@ describe("schema v1 and closed event definitions", () => {
       product_id: "kale-workbench",
       principal: { type: "anonymous" },
     });
-    expect(CAIL_LOG_SCHEMA_VERSION).toBe(1);
+    expect(CAIL_LOG_SCHEMA_VERSION).toBe(2);
     expect(events).toEqual([
       {
-        schema_version: 1,
+        schema_version: 2,
         timestamp: "2026-07-13T16:00:00.000Z",
         severity_text: "INFO",
         severity_number: 9,
@@ -81,7 +82,6 @@ describe("schema v1 and closed event definitions", () => {
   it("validates and deeply freezes catalog definitions", () => {
     const catalog = defineEventCatalog({
       "test.ready": {
-        body: "Test ready.",
         source: "both",
         severity: "info",
         required: ["request_id"],
@@ -94,7 +94,7 @@ describe("schema v1 and closed event definitions", () => {
     expect(() =>
       defineEventCatalog({
         "bad event": {
-          body: "Bad.", source: "both", severity: "info",
+          source: "both", severity: "info",
           required: [], optional: [],
         },
       }),
@@ -102,7 +102,7 @@ describe("schema v1 and closed event definitions", () => {
     expect(() =>
       defineEventCatalog({
         "cail.action.terminal": {
-          body: "Conflicting definition.", source: "platform", severity: "info",
+          source: "platform", severity: "info",
           required: [], optional: [],
         },
       }),
@@ -110,7 +110,7 @@ describe("schema v1 and closed event definitions", () => {
     expect(() =>
       defineEventCatalog({
         "test.bad": {
-          body: "Bad.", source: "tenant", severity: "info",
+          source: "tenant", severity: "info",
           required: ["product_id"], optional: [],
         },
       } as never),
@@ -120,7 +120,6 @@ describe("schema v1 and closed event definitions", () => {
   it("extends the canonical catalog without permitting redefinition", () => {
     const catalog = extendCailEventCatalog({
       "sandbox_bridge.outbox.retried": {
-        body: "Sandbox outbox delivery retried.",
         source: "platform",
         severity: "warn",
         required: ["usage_id", "product_id", "retry_count"],
@@ -130,7 +129,8 @@ describe("schema v1 and closed event definitions", () => {
     const events: CailLogEvent[] = [];
     const logger = createCailLogger({
       service: "sandbox-bridge", release: "local", env: "test",
-      sourceClass: "platform", catalog, sink: (event) => events.push(event),
+      sourceClass: "platform", subjectVersion: "v1", catalog,
+      sink: (event) => events.push(event),
     });
     logger.emit("sandbox_bridge.outbox.retried", {
       usage_id: "8b9ec144-39aa-4f1f-bda5-4c645facf2cd",
@@ -150,18 +150,21 @@ describe("schema v1 and closed event definitions", () => {
       release: "218328f",
       env: "production" as const,
       sourceClass: "platform" as const,
+      subjectVersion: "v1",
       catalog: CAIL_EVENT_CATALOG,
       sink: () => {},
     };
     expect(() => createCailLogger({ ...base, service: "Has Spaces" })).toThrow(TypeError);
     expect(() => createCailLogger({ ...base, release: "" })).toThrow(TypeError);
     expect(() => createCailLogger({ ...base, env: "prod" as never })).toThrow(TypeError);
-    expect(() => createCailLogger({ ...base, sourceClass: "unknown" as never })).toThrow(TypeError);
+    expect(() =>
+      createCailLogger({ ...base, sourceClass: "unknown" } as never),
+    ).toThrow(TypeError);
     expect(() => createCailLogger({
       ...base,
       catalog: {
         "forged.event": {
-          body: "Forged.", source: "platform", severity: "info",
+          source: "platform", severity: "info",
           required: [], optional: [],
         },
       } as never,
@@ -182,6 +185,7 @@ describe("failure containment", () => {
       release: "local",
       env: "test",
       sourceClass: "platform",
+      subjectVersion: "v1",
       catalog: CAIL_EVENT_CATALOG,
       sink: (event) => events.push(event),
       onDiagnostic: (code) => diagnostics.push(code),
@@ -205,6 +209,7 @@ describe("failure containment", () => {
       release: "local",
       env: "test",
       sourceClass: "platform",
+      subjectVersion: "v1",
       catalog: CAIL_EVENT_CATALOG,
       sink: () => { throw new Error("SECRET sink payload"); },
       onDiagnostic: () => { throw new Error("SECRET diagnostic"); },

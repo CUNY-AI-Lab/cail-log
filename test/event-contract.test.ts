@@ -10,7 +10,7 @@ import {
 
 const ACTION_ID = "9f50d4a4-ef70-41b2-b225-0a5cbf2df5e7";
 const USAGE_ID = "8b9ec144-39aa-4f1f-bda5-4c645facf2cd";
-const SUBJECT = "cail-0123456789abcdef0123456789abcdef";
+const SUBJECT = "cail-v1-0123456789abcdef0123456789abcdef";
 
 function capture() {
   const events: CailLogEvent[] = [];
@@ -20,6 +20,7 @@ function capture() {
     release: "local",
     env: "test",
     sourceClass: "platform",
+    subjectVersion: "v1",
     catalog: CAIL_EVENT_CATALOG,
     sink: (event) => events.push(event),
     onDiagnostic: (code) => diagnostics.push(code),
@@ -142,7 +143,6 @@ describe("catalog and sink gates", () => {
     expect(() =>
       defineEventCatalog({
         "bad.event": {
-          body: "Bad event.",
           source: "platform",
           severity: "outcome",
           required: ["product_id"],
@@ -156,7 +156,6 @@ describe("catalog and sink gates", () => {
     expect(() =>
       defineEventCatalog({
         "bad.terminal": {
-          body: "Bad terminal event.",
           source: "platform",
           severity: "outcome",
           required: ["terminal"],
@@ -172,7 +171,6 @@ describe("catalog and sink gates", () => {
     expect(() =>
       defineEventCatalog({
         "bad.success_error": {
-          body: "Impossible success event.",
           source: "platform",
           severity: "outcome",
           required: ["terminal", "error_type"],
@@ -191,6 +189,7 @@ describe("catalog and sink gates", () => {
         release: "local",
         env: "test",
         sourceClass: "platform",
+        subjectVersion: "v1",
         catalog: CAIL_EVENT_CATALOG,
         // @ts-expect-error sink selection is required
         sink: undefined,
@@ -206,6 +205,7 @@ describe("catalog and sink gates", () => {
       release: "local",
       env: "test",
       sourceClass: "platform",
+      subjectVersion: "v1",
       catalog: CAIL_EVENT_CATALOG,
       sink: jsonLineSink,
     });

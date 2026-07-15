@@ -2,7 +2,7 @@ import { type CailEventCatalog, type CailEventDefinition, type CailLogEnvironmen
 export type CailLogDiagnosticCode = "clock_error" | "event_contract_error" | "event_invalid" | "event_dropped" | "sink_error";
 export type CailLogSink = (event: CailLogEvent) => unknown;
 export type CailLogDiagnosticSink = (code: CailLogDiagnosticCode) => unknown;
-export interface CailLoggerOptions<Catalog extends CailEventCatalog, Source extends CailSourceClass> {
+type CailLoggerOptionsBase<Catalog extends CailEventCatalog, Source extends CailSourceClass> = {
     service: string;
     release: string;
     env: CailLogEnvironment;
@@ -11,7 +11,12 @@ export interface CailLoggerOptions<Catalog extends CailEventCatalog, Source exte
     sink: CailLogSink;
     onDiagnostic?: CailLogDiagnosticSink;
     clock?: () => number;
-}
+};
+export type CailLoggerOptions<Catalog extends CailEventCatalog, Source extends CailSourceClass> = CailLoggerOptionsBase<Catalog, Source> & (Source extends "platform" ? {
+    subjectVersion: string;
+} : {
+    subjectVersion?: never;
+});
 type CailEventNameFor<Catalog extends CailEventCatalog, Source extends CailSourceClass> = {
     [Event in Extract<keyof Catalog, string>]: Extract<Catalog[Event]["source"], Source | "both"> extends never ? never : Event;
 }[Extract<keyof Catalog, string>];

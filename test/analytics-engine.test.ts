@@ -6,8 +6,10 @@ import {
   CAIL_ANALYTICS_ENGINE_MAX_POINTS_PER_INVOCATION,
   CAIL_EVENT_CATALOG,
   CAIL_EVENTS,
+  CAIL_PLATFORM_FIELD_NAMES,
   createAnalyticsEngineSink,
   createCailLogger,
+  defineEventCatalog,
   fanoutSinks,
   toAnalyticsEngineDataPoint,
   type CailAnalyticsEngineDataPoint,
@@ -15,15 +17,18 @@ import {
 } from "../src/index.js";
 
 const ACTION_ID = "9f50d4a4-ef70-41b2-b225-0a5cbf2df5e7";
-const SUBJECT = "cail-0123456789abcdef0123456789abcdef";
+const SUBJECT = "cail-v1-0123456789abcdef0123456789abcdef";
 
-function terminalEvent(): CailLogEvent {
+function terminalEvent(
+  environment: "production" | "staging" = "production",
+): CailLogEvent {
   let captured: CailLogEvent | undefined;
   const logger = createCailLogger({
     service: "agent-studio",
     release: "abc123",
-    env: "production",
+    env: environment,
     sourceClass: "platform",
+    subjectVersion: "v1",
     catalog: CAIL_EVENT_CATALOG,
     sink: (event) => { captured = event; },
     clock: () => Date.parse("2026-07-13T20:00:00.000Z"),
@@ -94,6 +99,7 @@ describe("Analytics Engine projection", () => {
       release: "abc123",
       env: "production",
       sourceClass: "platform",
+      subjectVersion: "v1",
       catalog: CAIL_EVENT_CATALOG,
       sink: fanoutSinks(
         () => Promise.reject(new Error("secret user content")),
@@ -139,36 +145,38 @@ describe("Analytics Engine projection", () => {
 
   it("isolates production and staging sampling indexes", () => {
     const event = terminalEvent();
-    const staging = {
-      ...event,
-      resource: {
-        ...event.resource,
-        "deployment.environment.name": "staging" as const,
-      },
-    };
+    const staging = terminalEvent("staging");
     expect(toAnalyticsEngineDataPoint(event).indexes).toEqual(["production:agent-studio"]);
     expect(toAnalyticsEngineDataPoint(staging).indexes).toEqual(["staging:agent-studio"]);
   });
 
   it("stays within positional and byte limits at maximum contract lengths", () => {
-    const base = terminalEvent();
-    const maximal: CailLogEvent = {
-      ...base,
-      resource: {
-        ...base.resource,
-        "service.name": `s${"s".repeat(63)}`,
-        "service.version": `v${"v".repeat(127)}`,
+    const catalog = defineEventCatalog({
+      "test.maximal": {
+        source: "platform",
+        severity: "info",
+        required: [],
+        optional: CAIL_PLATFORM_FIELD_NAMES,
       },
-      attributes: {
-        ...base.attributes,
-        "cail.product.id": `p${"p".repeat(63)}`,
-        "cail.cohort.id": `c${"c".repeat(63)}`,
-        "url.template": `/${"r".repeat(158)}`,
-        "gen_ai.request.model": `m${"m".repeat(95)}`,
-        "gen_ai.response.model": `m${"m".repeat(95)}`,
-      },
-    };
-    const point = toAnalyticsEngineDataPoint(maximal);
+    });
+    let maximal: CailLogEvent | undefined;
+    const logger = createCailLogger({
+      service: `s${"s".repeat(63)}`,
+      release: `v${"v".repeat(127)}`,
+      env: "production",
+      sourceClass: "platform",
+      subjectVersion: "v1",
+      catalog,
+      sink: (event) => { maximal = event; },
+    });
+    logger.emit("test.maximal", {
+      product_id: `p${"p".repeat(63)}`,
+      cohort: `c${"c".repeat(63)}`,
+      route: `/${"r".repeat(158)}`,
+      request_model: `m${"m".repeat(95)}`,
+      response_model: `m${"m".repeat(95)}`,
+    });
+    const point = toAnalyticsEngineDataPoint(maximal!);
     expect(point.indexes).toHaveLength(1);
     expect(new TextEncoder().encode(point.indexes[0]).byteLength).toBeLessThanOrEqual(96);
     expect(point.blobs).toHaveLength(20);
@@ -176,12 +184,25 @@ describe("Analytics Engine projection", () => {
     expect(new TextEncoder().encode(point.blobs.join("")).byteLength).toBeLessThanOrEqual(16 * 1024);
     expect(CAIL_ANALYTICS_ENGINE_MAX_POINTS_PER_INVOCATION).toBe(250);
 
-    const serviceFallback = toAnalyticsEngineDataPoint({
-      ...maximal,
-      attributes: Object.fromEntries(
-        Object.entries(maximal.attributes).filter(([name]) => name !== "cail.product.id"),
-      ) as CailLogEvent["attributes"],
+    const tenantCatalog = defineEventCatalog({
+      "test.service_only": {
+        source: "tenant",
+        severity: "info",
+        required: [],
+        optional: [],
+      },
     });
+    let serviceOnly: CailLogEvent | undefined;
+    const tenantLogger = createCailLogger({
+      service: `s${"s".repeat(63)}`,
+      release: "local",
+      env: "production",
+      sourceClass: "tenant",
+      catalog: tenantCatalog,
+      sink: (event) => { serviceOnly = event; },
+    });
+    tenantLogger.emit("test.service_only");
+    const serviceFallback = toAnalyticsEngineDataPoint(serviceOnly!);
     expect(serviceFallback.indexes[0].startsWith("production:_service.")).toBe(true);
     expect(new TextEncoder().encode(serviceFallback.indexes[0]).byteLength).toBeLessThanOrEqual(96);
   });

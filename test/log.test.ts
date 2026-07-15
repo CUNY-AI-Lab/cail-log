@@ -13,7 +13,7 @@ import {
 } from "../src/index.js";
 
 const ACTION_ID = "9f50d4a4-ef70-41b2-b225-0a5cbf2df5e7";
-const SUBJECT = "cail-0123456789abcdef0123456789abcdef";
+const SUBJECT = "cail-v1-0123456789abcdef0123456789abcdef";
 
 function actionFields() {
   return {
@@ -31,6 +31,7 @@ function capture() {
     release: "local",
     env: "test",
     sourceClass: "platform",
+    subjectVersion: "v1",
     catalog: CAIL_EVENT_CATALOG,
     sink: (event) => events.push(event),
     onDiagnostic: (code) => diagnostics.push(code),
@@ -100,7 +101,8 @@ describe("explicit sinks and derived severity", () => {
     const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     const logger = createCailLogger({
       service: "workbench", release: "local", env: "test",
-      sourceClass: "platform", catalog: CAIL_EVENT_CATALOG,
+      sourceClass: "platform", subjectVersion: "v1",
+      catalog: CAIL_EVENT_CATALOG,
       sink: jsonLineSink,
     });
     logger.emit(CAIL_EVENTS.ACTION_ADMITTED, actionFields());
@@ -116,7 +118,8 @@ describe("explicit sinks and derived severity", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const logger = createCailLogger({
       service: "workbench", release: "local", env: "test",
-      sourceClass: "platform", catalog: CAIL_EVENT_CATALOG,
+      sourceClass: "platform", subjectVersion: "v1",
+      catalog: CAIL_EVENT_CATALOG,
       sink: workersStructuredSink,
     });
     logger.emit(CAIL_EVENTS.ACTION_TERMINAL, {
@@ -133,7 +136,8 @@ describe("explicit sinks and derived severity", () => {
     const diagnostics: string[] = [];
     const logger = createCailLogger({
       service: "workbench", release: "local", env: "test",
-      sourceClass: "platform", catalog: CAIL_EVENT_CATALOG,
+      sourceClass: "platform", subjectVersion: "v1",
+      catalog: CAIL_EVENT_CATALOG,
       sink: async () => { throw new Error("SECRET"); },
       onDiagnostic: (code) => diagnostics.push(code),
     });

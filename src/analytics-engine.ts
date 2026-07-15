@@ -1,5 +1,6 @@
 import type { CailLogAttributeValue, CailLogEvent } from "./schema.js";
 import type { CailLogSink } from "./logger.js";
+import { assertValidatedEvent } from "./event-provenance.js";
 
 export const CAIL_ANALYTICS_ENGINE_DATASET = "cail_fleet_events_v1" as const;
 export const CAIL_ANALYTICS_ENGINE_SCHEMA_VERSION = 1 as const;
@@ -76,6 +77,7 @@ function numberAttribute(
 export function toAnalyticsEngineDataPoint(
   event: CailLogEvent,
 ): CailAnalyticsEngineDataPoint {
+  assertValidatedEvent(event);
   const attributes = event.attributes;
   const product = stringAttribute(attributes, "cail.product.id");
   const service = event.resource["service.name"];
@@ -159,6 +161,7 @@ export function fanoutSinks(...sinks: CailLogSink[]): CailLogSink {
     throw new TypeError("cail-log: fanout requires one or more sinks");
   }
   return (event) => {
+    assertValidatedEvent(event);
     const pending: Promise<unknown>[] = [];
     for (const sink of sinks) {
       try {

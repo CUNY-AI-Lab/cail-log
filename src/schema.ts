@@ -1,4 +1,6 @@
-export const CAIL_LOG_SCHEMA_VERSION = 1 as const;
+import { isSecretShaped } from "./secret-shape.js";
+
+export const CAIL_LOG_SCHEMA_VERSION = 2 as const;
 
 export const CAIL_EVENT_INVALID = "event.invalid" as const;
 export const CAIL_EVENT_INVALID_MESSAGE = "Event name rejected." as const;
@@ -256,6 +258,54 @@ export type CailEventDefinition =
         optional: readonly CailTenantLogFieldName[];
       }>);
 
+type CailCustomEventDefinitionBase = Readonly<{
+  severity: CailEventSeverity;
+  outcomes?: readonly CailOutcome[];
+  terminal_reasons?: readonly CailTerminalReason[];
+}>;
+
+export type CailCustomEventDefinition =
+  | (CailCustomEventDefinitionBase &
+      Readonly<{
+        source: "platform";
+        required: readonly CailPlatformLogFieldName[];
+        optional: readonly CailPlatformLogFieldName[];
+      }>)
+  | (CailCustomEventDefinitionBase &
+      Readonly<{
+        source: "tenant" | "both";
+        required: readonly CailTenantLogFieldName[];
+        optional: readonly CailTenantLogFieldName[];
+      }>);
+
+export const CAIL_SERVICE_EVENT_BODY = "Service event recorded." as const;
+
+type CailServiceEventDefinition<
+  Definition extends CailCustomEventDefinition,
+> = Readonly<{
+  body: typeof CAIL_SERVICE_EVENT_BODY;
+  source: Definition["source"];
+  severity: Definition["severity"];
+  required: Definition["required"];
+  optional: Definition["optional"];
+}> &
+  (Definition extends {
+    outcomes: infer Outcomes extends readonly CailOutcome[];
+  }
+    ? Readonly<{ outcomes: Outcomes }>
+    : Readonly<{ outcomes?: never }>) &
+  (Definition extends {
+    terminal_reasons: infer Reasons extends readonly CailTerminalReason[];
+  }
+    ? Readonly<{ terminal_reasons: Reasons }>
+    : Readonly<{ terminal_reasons?: never }>);
+
+type CailServiceEventCatalog<
+  Catalog extends Record<string, CailCustomEventDefinition>,
+> = Readonly<{
+  [Event in keyof Catalog]: CailServiceEventDefinition<Catalog[Event]>;
+}>;
+
 export type CailEventCatalog = Readonly<
   Record<string, CailEventDefinition>
 >;
@@ -321,7 +371,8 @@ export const SLUG_RE = /^[a-z0-9][a-z0-9_.-]{0,63}$/;
 export const MACHINE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 export const MODEL_ID_RE =
   /^(?:@[a-z0-9][a-z0-9._-]{0,31}\/)?[a-z0-9][a-z0-9._:/-]{0,95}$/;
-export const SUBJECT_RE = /^cail-[0-9a-f]{32}$/;
+export const SUBJECT_VERSION_RE = /^[a-z0-9][a-z0-9_]{0,15}$/;
+export const SUBJECT_RE = /^cail-[a-z0-9][a-z0-9_]{0,15}-[0-9a-f]{32}$/;
 export const REQUEST_ID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 export const HEX_TRACE_RE = /^[0-9a-f]{32}$/;
@@ -400,6 +451,7 @@ function buildEventCatalog<
     if (
       event === CAIL_EVENT_INVALID ||
       (!allowReservedCailNamespace && event.startsWith("cail.")) ||
+      isSecretShaped(event) ||
       !SLUG_RE.test(event)
     ) {
       throw new TypeError(
@@ -559,9 +611,34 @@ function buildEventCatalog<
 }
 
 export function defineEventCatalog<
-  const Catalog extends Record<string, CailEventDefinition>,
->(catalog: Catalog): Readonly<Catalog> {
-  return buildEventCatalog(catalog, false);
+  const Catalog extends Record<string, CailCustomEventDefinition>,
+>(
+  catalog: Catalog & {
+    readonly [Event in keyof Catalog]: Readonly<{ body?: never }>;
+  },
+): CailServiceEventCatalog<Catalog> {
+  if (!isPlainObject(catalog)) {
+    throw new TypeError("cail-log: event catalog must be an object");
+  }
+  const withBodies = Object.create(null) as Record<
+    string,
+    CailEventDefinition
+  >;
+  for (const [event, value] of Object.entries(catalog)) {
+    if (!isPlainObject(value) || Object.hasOwn(value, "body")) {
+      throw new TypeError(
+        "cail-log: service event bodies are fixed by the library",
+      );
+    }
+    withBodies[event] = {
+      ...value,
+      body: CAIL_SERVICE_EVENT_BODY,
+    } as CailEventDefinition;
+  }
+  return buildEventCatalog(
+    withBodies,
+    false,
+  ) as CailServiceEventCatalog<Catalog>;
 }
 
 export function isDefinedEventCatalog(value: unknown): value is CailEventCatalog {
@@ -631,8 +708,12 @@ export const CAIL_EVENT_CATALOG = buildEventCatalog({
 }, true);
 
 export function extendCailEventCatalog<
-  const Catalog extends Record<string, CailEventDefinition>,
->(catalog: Catalog): Readonly<typeof CAIL_EVENT_CATALOG & Catalog> {
+  const Catalog extends Record<string, CailCustomEventDefinition>,
+>(
+  catalog: Catalog & {
+    readonly [Event in keyof Catalog]: Readonly<{ body?: never }>;
+  },
+): Readonly<typeof CAIL_EVENT_CATALOG & CailServiceEventCatalog<Catalog>> {
   const serviceCatalog = defineEventCatalog(catalog);
   const combined = Object.assign(
     Object.create(null) as Record<string, CailEventDefinition>,
@@ -641,5 +722,7 @@ export function extendCailEventCatalog<
   );
   const frozen = Object.freeze(combined);
   VALIDATED_EVENT_CATALOGS.add(frozen);
-  return frozen as Readonly<typeof CAIL_EVENT_CATALOG & Catalog>;
+  return frozen as Readonly<
+    typeof CAIL_EVENT_CATALOG & CailServiceEventCatalog<Catalog>
+  >;
 }

@@ -13,6 +13,7 @@ import {
   ROUTE_TEMPLATE_RE,
   SLUG_RE,
   SUBJECT_RE,
+  SUBJECT_VERSION_RE,
   isDefinedEventCatalog,
   isPlainObject,
   type CailEventCatalog,
@@ -29,7 +30,12 @@ import {
   type CailSourceClass,
   type CailTerminalFields,
 } from "./schema.js";
+import {
+  assertValidatedEvent,
+  markValidatedEvent,
+} from "./event-provenance.js";
 import { isSensitive } from "./sensitive.js";
+import { isSecretShaped } from "./secret-shape.js";
 
 export type CailLogDiagnosticCode =
   | "clock_error"
@@ -43,10 +49,10 @@ export type CailLogDiagnosticSink = (
   code: CailLogDiagnosticCode,
 ) => unknown;
 
-export interface CailLoggerOptions<
+type CailLoggerOptionsBase<
   Catalog extends CailEventCatalog,
   Source extends CailSourceClass,
-> {
+> = {
   service: string;
   release: string;
   env: CailLogEnvironment;
@@ -55,7 +61,15 @@ export interface CailLoggerOptions<
   sink: CailLogSink;
   onDiagnostic?: CailLogDiagnosticSink;
   clock?: () => number;
-}
+};
+
+export type CailLoggerOptions<
+  Catalog extends CailEventCatalog,
+  Source extends CailSourceClass,
+> = CailLoggerOptionsBase<Catalog, Source> &
+  (Source extends "platform"
+    ? { subjectVersion: string }
+    : { subjectVersion?: never });
 
 type CailEventNameFor<
   Catalog extends CailEventCatalog,
@@ -194,9 +208,9 @@ const ENVIRONMENTS: ReadonlySet<string> = new Set([
 ]);
 const SOURCE_CLASSES: ReadonlySet<string> = new Set(["platform", "tenant"]);
 const KNOWN_FIELDS: ReadonlySet<string> = new Set(CAIL_PLATFORM_FIELD_NAMES);
-
 function sanitizePattern(value: unknown, pattern: RegExp): string | undefined {
   if (isSensitive(value) || typeof value !== "string") return undefined;
+  if (isSecretShaped(value)) return undefined;
   return pattern.test(value) ? value : undefined;
 }
 
@@ -353,7 +367,7 @@ function sanitizeTrace(value: unknown):
   return { trace_id: traceId, span_id: spanId, trace_flags: traceFlags };
 }
 
-function sanitizePrincipal(value: unknown):
+function sanitizePrincipal(value: unknown, subjectVersion: string | undefined):
   | { type: "user" | "app" | "service" | "canary" | "anonymous"; subject?: string }
   | undefined {
   if (!isPlainObject(value)) return undefined;
@@ -373,8 +387,12 @@ function sanitizePrincipal(value: unknown):
     | "anonymous";
   const hasSubject = Object.hasOwn(value, "subject");
   if (principalType === "user" || principalType === "canary") {
+    if (subjectVersion === undefined) return undefined;
     const subject = sanitizePattern(value["subject"], SUBJECT_RE);
-    return subject === undefined ? undefined : { type: principalType, subject };
+    return subject === undefined ||
+      !subject.startsWith(`cail-${subjectVersion}-`)
+      ? undefined
+      : { type: principalType, subject };
   }
   return hasSubject ? undefined : { type: principalType };
 }
@@ -407,6 +425,7 @@ function sanitizeTerminal(value: unknown):
 }
 
 export function jsonLineSink(event: CailLogEvent): void {
+  assertValidatedEvent(event);
   console.log(JSON.stringify(event));
 }
 
@@ -415,6 +434,7 @@ export type CailWorkersLogEvent = Readonly<
 >;
 
 export function toWorkersLogEvent(event: CailLogEvent): CailWorkersLogEvent {
+  assertValidatedEvent(event);
   const output: Record<string, CailLogAttributeValue> = {
     ...event.attributes,
     "service.namespace": event.resource["service.namespace"],
@@ -448,6 +468,7 @@ export function workersStructuredSink(event: CailLogEvent): void {
 
 interface LoggerContext {
   sourceClass: CailSourceClass;
+  subjectVersion?: string;
   resource: CailLogEvent["resource"];
 }
 
@@ -538,7 +559,10 @@ function buildEvent(
       accepted.add(key);
     }
     if (allowed.has("principal") && Object.hasOwn(input, "principal")) {
-      const principal = sanitizePrincipal(input["principal"]);
+      const principal = sanitizePrincipal(
+        input["principal"],
+        context.subjectVersion,
+      );
       if (principal === undefined) {
         report("event_contract_error");
         return undefined;
@@ -664,6 +688,23 @@ export function createCailLogger<
   if (!SOURCE_CLASSES.has(options.sourceClass)) {
     throw new TypeError("cail-log: sourceClass must be platform or tenant");
   }
+  const subjectVersion = sanitizePattern(
+    options.subjectVersion,
+    SUBJECT_VERSION_RE,
+  );
+  if (options.sourceClass === "platform" && subjectVersion === undefined) {
+    throw new TypeError(
+      "cail-log: platform loggers require a subjectVersion",
+    );
+  }
+  if (
+    options.sourceClass === "tenant" &&
+    Object.hasOwn(options, "subjectVersion")
+  ) {
+    throw new TypeError(
+      "cail-log: tenant loggers must not configure a subjectVersion",
+    );
+  }
   let configuredSink: CailLogSink | undefined;
   let configuredClock: (() => number) | undefined;
   let configuredDiagnostic: CailLogDiagnosticSink | undefined;
@@ -699,6 +740,7 @@ export function createCailLogger<
   const onDiagnostic = configuredDiagnostic;
   const context: LoggerContext = {
     sourceClass: options.sourceClass,
+    subjectVersion,
     resource: Object.freeze({
       "service.namespace": "cuny-ai-lab",
       "service.name": service,
@@ -770,6 +812,7 @@ export function createCailLogger<
     }
 
     if (logEvent === undefined) return;
+    markValidatedEvent(logEvent);
 
     try {
       const result = sink(logEvent) as unknown;

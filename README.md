@@ -29,11 +29,29 @@ storage products still own delivery, sampling, retention, and querying.
   queryable JSON object; the JSON-line sink is a separate deliberate choice.
 - `fanoutSinks()` invokes every selected sink even if another fails, so a
   diagnostic destination cannot suppress the fleet-analytics projection.
+- Every exported sink and projection rejects a caller-constructed event before
+  it writes. Only the exact frozen object produced by this package instance's
+  `createCailLogger()` is accepted.
+- Service-local catalogs cannot define bodies. Every service-local event uses
+  the library-owned body `Service event recorded.`
 
 These rules close common free-text channels. They cannot prove the semantic
 origin of every valid machine identifier. Trusted platform callers still have
 to classify values correctly and must not place personal data in fields such
 as model, key, cohort, or project identifiers.
+
+The guarantee applies to the supported public path: a validated catalog,
+`createCailLogger()`, and adapters from the same installed package instance.
+It is not a sandbox against arbitrary code in the process. A custom sink can
+still copy a validated event elsewhere, and events produced by one duplicate
+package instance are rejected by another instance's adapters.
+
+Validation rejects common secret-token shapes as well as the field grammar,
+and the canary suite covers PII-shaped values, secret shapes that deliberately
+fit identifier fields, error paths, catalog names, and direct adapter calls.
+It cannot establish semantic provenance for every syntactically valid
+identifier. Trusted platform callers must still keep personal data out of
+model, key, cohort, project, provider, and other machine-identifier fields.
 
 ## Install
 
@@ -60,6 +78,7 @@ const log = createCailLogger({
   release: "218328f",
   env: "production",
   sourceClass: "platform",
+  subjectVersion: "v1",
   catalog: CAIL_EVENT_CATALOG,
   sink: workersStructuredSink,
 });
@@ -70,7 +89,7 @@ log.emit(CAIL_EVENTS.SANDBOX_USAGE_SETTLED, {
   product_id: "kale-workbench",
   principal: {
     type: "user",
-    subject: "cail-0123456789abcdef0123456789abcdef",
+    subject: "cail-v1-0123456789abcdef0123456789abcdef",
   },
   terminal: { outcome: "ok", reason: "completed" },
   usage: {
@@ -89,8 +108,11 @@ declare the same contract components; a name is never just a message string.
 The `cail.*` namespace is reserved for the canonical library catalog so a
 consumer cannot redefine a shared fleet event with a different structure.
 Use `extendCailEventCatalog()` when one logger needs both canonical fleet events
-and service-local events. Logger construction rejects catalog-shaped objects
-that did not pass one of these definition functions.
+and service-local events. A service-local definition supplies source, severity,
+required and optional fields, and optional terminal constraints. It cannot
+supply `body`; TypeScript rejects that property and the runtime rejects it when
+types are bypassed. Logger construction rejects catalog-shaped objects that did
+not pass one of these definition functions.
 
 ### Canonical fleet events
 
@@ -116,7 +138,7 @@ The portable sink receives an OpenTelemetry-aligned record:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "timestamp": "2026-07-13T16:00:00.000Z",
   "severity_text": "INFO",
   "severity_number": 9,
@@ -151,10 +173,25 @@ example, `resource["service.name"]` becomes the top-level key `service.name`.
 Cloudflare Workers Logs can then filter, group, and aggregate those fields
 without making Cloudflare's storage format the portable package contract.
 
-This sink constrains custom console events only. Cloudflare separately creates
-invocation logs, which can contain request URL and response metadata. A
-production pilot must either set `observability.logs.invocation_logs` to
-`false` or explicitly approve the native fields, retention, access, and
+The two console sinks carry every field from the accepted event. Their JSON
+layouts differ. `jsonLineSink` writes the nested portable record as one NDJSON
+line;
+`workersStructuredSink` flattens resources and attributes, renames
+`schema_version` to `cail.schema.version` and `event_name` to `event.name`, and
+passes one object to Cloudflare. Exact severity remains in `severity_text` and
+`severity_number`. Cloudflare console severity is coarser: fatal and error use
+`console.error`, warn uses `console.warn`, and info, debug, and trace use
+`console.log`.
+
+The sinks and `toWorkersLogEvent()` accept only records received from a
+`createCailLogger()` sink callback in the same package instance. A structural
+lookalike throws `TypeError` before console output.
+
+`workersStructuredSink` constrains custom console events only. Cloudflare
+separately creates invocation logs, which can contain request URL and response
+metadata. A production pilot must either set
+`observability.logs.invocation_logs` to `false` or explicitly approve the
+native fields, retention, access, and
 purpose. The choice belongs in deployment configuration, not this package.
 
 ### Fleet analytics projection
@@ -208,6 +245,10 @@ allows 250 Analytics Engine points per Worker invocation; the exported
 adapters enforce that platform ceiling. Canonical producers emit a bounded
 number of lifecycle events per invocation and must not use `cail-log` as a
 bulk-event transport.
+
+`toAnalyticsEngineDataPoint()` and `createAnalyticsEngineSink()` enforce the
+same logger-produced-record gate as the console sinks. A caller-constructed
+`CailLogEvent` throws before a data point is returned or written.
 
 ## Field mapping
 
@@ -267,10 +308,40 @@ attribution for a fleet product such as Workbench or Site Studio. `project` is
 only a Kale Deploy tenant project. Shared gateways must not conflate these
 three scopes.
 
-The canonical subject shape is `cail-` plus 32 lowercase hexadecimal
-characters. It is pseudonymous, not anonymous: a stable pseudonym can still be
-linkable personal data. Prefer a coarse, policy-defined `cohort` when a
-per-person view is not necessary.
+The canonical subject shape is
+`cail-<version>-<32-lowercase-hex-characters>`. Platform logger construction
+requires `subjectVersion`, and a user or canary subject must carry that exact
+version. Versions use 1–16 lowercase letters, digits, or underscores and begin
+with a letter or digit. Tenant loggers cannot configure a subject version.
+
+The value is pseudonymous and remains linkable personal data. Prefer a coarse,
+policy-defined `cohort` when a per-person view is not necessary. This package
+does not derive the HMAC or prove identity-boundary provenance. The trusted
+identity boundary owns keyed derivation and version coordination; it must never
+use an email local part, raw IdP subject, or unkeyed digest.
+
+### Numeric field semantics
+
+- `req_bytes` and `resp_bytes` are nonnegative safe-integer payload-body bytes,
+  excluding headers. When transport encoding compresses the body, record the
+  transferred compressed size.
+- `input_tokens` and `output_tokens` are nonnegative safe-integer totals for
+  the one model call. Input totals include cached input tokens and output totals
+  include reasoning tokens when the provider reports those components.
+- `cost_micro_usd` is a nonnegative safe-integer observed model-call cost in
+  millionths of one US dollar. It carries no cost source or quality and is not
+  an accounting adjustment or charge authority.
+- `duration_ms` and `upstream_ms` are finite, nonnegative milliseconds and may
+  be fractional. Retry counts, byte counts, token counts, money, quota values,
+  and settled usage quantities must be safe integers.
+- Settled Sandbox usage is exact integer MiB-milliseconds from the trusted
+  meter. GiB-seconds and allocated cost are downstream derived facts.
+
+Omission means unknown or unavailable; an explicit zero means measured zero.
+Workers Logs and NDJSON omit absent attributes. The Analytics Engine projection
+uses `-1` for missing nonnegative numeric facts. Operational cost and token
+fields remain diagnostic observations; the durable accounting service owns
+cost quality, reconciliation, corrections, and authoritative totals.
 
 ## Quotas
 
@@ -283,7 +354,7 @@ log.emit(CAIL_EVENTS.QUOTA_CHARGED, {
   product_id: "kale-workbench",
   principal: {
     type: "user",
-    subject: "cail-0123456789abcdef0123456789abcdef",
+    subject: "cail-v1-0123456789abcdef0123456789abcdef",
   },
   terminal: { outcome: "ok", reason: "completed" },
   quota: {
@@ -357,6 +428,15 @@ and writes the matching `traceparent`, request ID, and normalized `tracestate`.
 W3C-valid empty `tracestate` list members are accepted and removed; an entirely
 empty value is not forwarded.
 
+The W3C baseline is the 2021 Trace Context Recommendation: the helper carries
+the sampled bit, creates a fresh span for each hop, forwards valid
+`tracestate`, and emits version `00`. `X-CAIL-Request-Id` is a separate CAIL
+contract. Only a lowercase UUID v4 in that header is adopted. Other UUID
+versions, uppercase values, malformed values, and the compatibility-only
+`X-Request-Id` alias are not adopted; a new UUID v4 is minted instead. Every
+fleet ingress must normalize to `X-CAIL-Request-Id` before relying on
+cross-service request-ID correlation.
+
 ## Diagnostics and sensitive values
 
 The optional `onDiagnostic` callback receives one closed code: `clock_error`,
@@ -373,6 +453,11 @@ This fire-and-forget behavior means `cail-log` is not an accounting ledger and
 cannot prove that every admitted action reached a terminal state. The durable
 action/call store is authoritative; log events are diagnostic projections of
 admission and terminal transitions.
+
+The package does not retry a sink, deduplicate events, enforce idempotency,
+authorize callers, enforce quotas, or resolve an ambiguous delivery outcome.
+Those responsibilities remain with the producer and the durable service that
+owns the underlying state transition.
 
 `sensitive(value)` wraps a secret so string conversion, JSON serialization,
 template interpolation, and Node inspection produce `[REDACTED]`. A wrapper in
@@ -401,6 +486,20 @@ Semantic conventions evolve, especially GenAI attributes. A future convention
 change requires an explicit schema decision; the package will not silently
 rename emitted fields.
 
+Portable `schema_version` is currently `2`. The Analytics Engine
+projection has its own exported schema version and append-only positional
+mapping. The package version, component `service.version`, and service-local
+catalog version are separate concerns. Producers that add or change
+service-local event definitions must version their event contract; the shared
+`schema_version` does not make two differently defined local events compatible.
+
+Schema-1 platform consumers must add `subjectVersion`, move pseudonyms to
+`cail-<version>-<32-lowercase-hex>`, remove service-local catalog bodies, and
+stop constructing events for adapters directly. Collectors should branch on
+`schema_version` during a mixed rollout. No database migration exists in this
+repository. Analytics Engine projection schema 1 remains append-only and stores
+portable schema 2 in its `log_schema_version` column.
+
 ## Development
 
 ```bash
@@ -408,6 +507,8 @@ bun install
 bun test
 bun run typecheck
 bun run build
+bun run check:dist
+bun run verify
 ```
 
 The suite covers the record envelope, Cloudflare projection, closed event
@@ -415,8 +516,14 @@ catalogs, trust profiles, quota consistency, hostile inputs, failure
 containment, W3C propagation, and a PII-shaped canary attempted through every
 runtime field.
 
-See [DESIGN.md](DESIGN.md) for the design gate, boundaries, pilot requirements,
-and rollback plan.
+`check:dist` compiles into an isolated temporary directory and byte-compares
+that output with committed `dist`, normalizing only source-map paths. `verify`
+runs that parity check, tests, type-checks, and package-content inspection. The
+committed CI workflow installs with the frozen Bun lockfile and runs `verify`
+on pull requests and pushes to `main`.
+
+[DESIGN.md](DESIGN.md) is the canonical architecture, security, operations,
+adoption, and rollback guide. This README is the consumer guide.
 
 ## License
 

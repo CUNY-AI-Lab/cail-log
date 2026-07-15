@@ -1,3 +1,4 @@
+import { assertValidatedEvent } from "./event-provenance.js";
 export const CAIL_ANALYTICS_ENGINE_DATASET = "cail_fleet_events_v1";
 export const CAIL_ANALYTICS_ENGINE_SCHEMA_VERSION = 1;
 export const CAIL_ANALYTICS_ENGINE_MISSING_NUMBER = -1;
@@ -50,6 +51,7 @@ function numberAttribute(attributes, name) {
         : CAIL_ANALYTICS_ENGINE_MISSING_NUMBER;
 }
 export function toAnalyticsEngineDataPoint(event) {
+    assertValidatedEvent(event);
     const attributes = event.attributes;
     const product = stringAttribute(attributes, "cail.product.id");
     const service = event.resource["service.name"];
@@ -124,6 +126,7 @@ export function fanoutSinks(...sinks) {
         throw new TypeError("cail-log: fanout requires one or more sinks");
     }
     return (event) => {
+        assertValidatedEvent(event);
         const pending = [];
         for (const sink of sinks) {
             try {

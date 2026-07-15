@@ -14,12 +14,12 @@ describe("type-level event contract", () => {
     const events: CailLogEvent[] = [];
     const platform = createCailLogger({
       service: "gateway", release: "local", env: "test",
-      sourceClass: "platform", catalog: CAIL_EVENT_CATALOG,
+      sourceClass: "platform", subjectVersion: "v1",
+      catalog: CAIL_EVENT_CATALOG,
       sink: (event) => events.push(event),
     });
     const tenantCatalog = defineEventCatalog({
       "tenant.requested": {
-        body: "Tenant request received.",
         source: "tenant",
         severity: "info",
         required: ["request_id"],
@@ -69,13 +69,23 @@ describe("type-level event contract", () => {
       defineEventCatalog({
         // @ts-expect-error tenant catalogs cannot define platform-only fields
         "tenant.forged": {
-          body: "Tenant forged.",
           source: "tenant",
           severity: "info",
           required: ["product_id"],
           optional: [],
         },
       });
+      const bodyEscape = {
+        "tenant.body_escape": {
+          body: "Caller-controlled message.",
+          source: "tenant",
+          severity: "info",
+          required: [],
+          optional: [],
+        },
+      } as const;
+      // @ts-expect-error service catalogs cannot supply runtime bodies
+      defineEventCatalog(bodyEscape);
       platform.emit(CAIL_EVENTS.ACTION_ADMITTED, {
         action_id: ACTION_ID,
         product_id: "kale-workbench",
@@ -86,7 +96,7 @@ describe("type-level event contract", () => {
         action_id: ACTION_ID,
         product_id: "kale-workbench",
         // @ts-expect-error anonymous principals cannot carry a subject
-        principal: { type: "anonymous", subject: "cail-0123456789abcdef0123456789abcdef" },
+        principal: { type: "anonymous", subject: "cail-v1-0123456789abcdef0123456789abcdef" },
       });
       platform.emit(CAIL_EVENTS.ACTION_TERMINAL, {
         action_id: ACTION_ID,
@@ -129,7 +139,8 @@ describe("type-level event contract", () => {
       // @ts-expect-error sink selection is required
       createCailLogger({
         service: "bad", release: "local", env: "test",
-        sourceClass: "platform", catalog: CAIL_EVENT_CATALOG,
+        sourceClass: "platform", subjectVersion: "v1",
+        catalog: CAIL_EVENT_CATALOG,
       });
     }
 

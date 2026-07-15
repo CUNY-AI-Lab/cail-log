@@ -1,5 +1,7 @@
-import { CAIL_EVENT_INVALID, CAIL_EVENT_INVALID_MESSAGE, CAIL_LOG_SCHEMA_VERSION, CAIL_PLATFORM_FIELD_NAMES, CAIL_SEVERITY_NUMBER, HEX_SPAN_RE, HEX_TRACE_RE, HTTP_METHODS, MACHINE_ID_RE, MODEL_ID_RE, REQUEST_ID_RE, ROUTE_TEMPLATE_RE, SLUG_RE, SUBJECT_RE, isDefinedEventCatalog, isPlainObject, } from "./schema.js";
+import { CAIL_EVENT_INVALID, CAIL_EVENT_INVALID_MESSAGE, CAIL_LOG_SCHEMA_VERSION, CAIL_PLATFORM_FIELD_NAMES, CAIL_SEVERITY_NUMBER, HEX_SPAN_RE, HEX_TRACE_RE, HTTP_METHODS, MACHINE_ID_RE, MODEL_ID_RE, REQUEST_ID_RE, ROUTE_TEMPLATE_RE, SLUG_RE, SUBJECT_RE, SUBJECT_VERSION_RE, isDefinedEventCatalog, isPlainObject, } from "./schema.js";
+import { assertValidatedEvent, markValidatedEvent, } from "./event-provenance.js";
 import { isSensitive } from "./sensitive.js";
+import { isSecretShaped } from "./secret-shape.js";
 function isPromiseLike(value) {
     return ((typeof value === "object" || typeof value === "function") &&
         value !== null &&
@@ -15,6 +17,8 @@ const SOURCE_CLASSES = new Set(["platform", "tenant"]);
 const KNOWN_FIELDS = new Set(CAIL_PLATFORM_FIELD_NAMES);
 function sanitizePattern(value, pattern) {
     if (isSensitive(value) || typeof value !== "string")
+        return undefined;
+    if (isSecretShaped(value))
         return undefined;
     return pattern.test(value) ? value : undefined;
 }
@@ -150,7 +154,7 @@ function sanitizeTrace(value) {
     }
     return { trace_id: traceId, span_id: spanId, trace_flags: traceFlags };
 }
-function sanitizePrincipal(value) {
+function sanitizePrincipal(value, subjectVersion) {
     if (!isPlainObject(value))
         return undefined;
     const type = sanitizeEnum(value["type"], [
@@ -165,8 +169,13 @@ function sanitizePrincipal(value) {
     const principalType = type;
     const hasSubject = Object.hasOwn(value, "subject");
     if (principalType === "user" || principalType === "canary") {
+        if (subjectVersion === undefined)
+            return undefined;
         const subject = sanitizePattern(value["subject"], SUBJECT_RE);
-        return subject === undefined ? undefined : { type: principalType, subject };
+        return subject === undefined ||
+            !subject.startsWith(`cail-${subjectVersion}-`)
+            ? undefined
+            : { type: principalType, subject };
     }
     return hasSubject ? undefined : { type: principalType };
 }
@@ -192,9 +201,11 @@ function sanitizeTerminal(value) {
     return { outcome: outcome, reason };
 }
 export function jsonLineSink(event) {
+    assertValidatedEvent(event);
     console.log(JSON.stringify(event));
 }
 export function toWorkersLogEvent(event) {
+    assertValidatedEvent(event);
     const output = {
         ...event.attributes,
         "service.namespace": event.resource["service.namespace"],
@@ -302,7 +313,7 @@ function buildEvent(eventName, fields, timestamp, context, catalog, report) {
             accepted.add(key);
         }
         if (allowed.has("principal") && Object.hasOwn(input, "principal")) {
-            const principal = sanitizePrincipal(input["principal"]);
+            const principal = sanitizePrincipal(input["principal"], context.subjectVersion);
             if (principal === undefined) {
                 report("event_contract_error");
                 return undefined;
@@ -411,6 +422,14 @@ export function createCailLogger(options) {
     if (!SOURCE_CLASSES.has(options.sourceClass)) {
         throw new TypeError("cail-log: sourceClass must be platform or tenant");
     }
+    const subjectVersion = sanitizePattern(options.subjectVersion, SUBJECT_VERSION_RE);
+    if (options.sourceClass === "platform" && subjectVersion === undefined) {
+        throw new TypeError("cail-log: platform loggers require a subjectVersion");
+    }
+    if (options.sourceClass === "tenant" &&
+        Object.hasOwn(options, "subjectVersion")) {
+        throw new TypeError("cail-log: tenant loggers must not configure a subjectVersion");
+    }
     let configuredSink;
     let configuredClock;
     let configuredDiagnostic;
@@ -441,6 +460,7 @@ export function createCailLogger(options) {
     const onDiagnostic = configuredDiagnostic;
     const context = {
         sourceClass: options.sourceClass,
+        subjectVersion,
         resource: Object.freeze({
             "service.namespace": "cuny-ai-lab",
             "service.name": service,
@@ -506,6 +526,7 @@ export function createCailLogger(options) {
         }
         if (logEvent === undefined)
             return;
+        markValidatedEvent(logEvent);
         try {
             const result = sink(logEvent);
             if (isPromiseLike(result)) {

@@ -19,6 +19,7 @@ function capture() {
     release: "218328f",
     env: "production",
     sourceClass: "platform",
+    subjectVersion: "v1",
     catalog: CAIL_EVENT_CATALOG,
     sink: (event) => events.push(event),
     clock: () => Date.UTC(2026, 6, 13, 16, 0, 0),
@@ -103,7 +104,7 @@ describe("Cloudflare projection", () => {
     });
     const output = toWorkersLogEvent(events[0]!);
     expect(output).toMatchObject({
-      "cail.schema.version": 1,
+      "cail.schema.version": 2,
       "event.name": "cail.action.admitted",
       "service.name": "model-proxy",
       "cail.product.id": "kale-workbench",
@@ -116,7 +117,8 @@ describe("Cloudflare projection", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const logger = createCailLogger({
       service: "model-proxy", release: "local", env: "test",
-      sourceClass: "platform", catalog: CAIL_EVENT_CATALOG,
+      sourceClass: "platform", subjectVersion: "v1",
+      catalog: CAIL_EVENT_CATALOG,
       sink: workersStructuredSink,
     });
     logger.emit(CAIL_EVENTS.ACTION_TERMINAL, {

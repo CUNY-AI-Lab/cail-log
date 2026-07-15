@@ -1,6 +1,6 @@
 {
   "name": "@cuny-ai-lab/cail-log",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "The pre-release CAIL operational event primitive: typed event contracts, trusted fleet attribution, privacy-safe diagnostics, and explicit structured sinks.",
   "type": "module",
   "license": "MIT",
@@ -24,13 +24,13 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "check:dist": "bun run build && git diff --exit-code -- dist",
+    "check:dist": "bun scripts/check-dist.ts",
     "typecheck": "tsc -p tsconfig.build.json --noEmit && tsc -p tsconfig.test.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "prepublishOnly": "bun run build",
+    "prepublishOnly": "bun run verify",
     "prepare": "bun run build",
-    "verify": "bun run build && bun test && bun run typecheck && bun pm pack --dry-run --ignore-scripts"
+    "verify": "bun run check:dist && bun test && bun run typecheck && bun pm pack --dry-run --ignore-scripts"
   },
   "devDependencies": {
     "@types/node": "^20.17.6",

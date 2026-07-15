@@ -1,4 +1,4 @@
-export declare const CAIL_LOG_SCHEMA_VERSION: 1;
+export declare const CAIL_LOG_SCHEMA_VERSION: 2;
 export declare const CAIL_EVENT_INVALID: "event.invalid";
 export declare const CAIL_EVENT_INVALID_MESSAGE: "Event name rejected.";
 export type CailLogLevel = "fatal" | "error" | "warn" | "info" | "debug" | "trace";
@@ -200,6 +200,43 @@ export type CailEventDefinition = (CailEventDefinitionBase & Readonly<{
     required: readonly CailTenantLogFieldName[];
     optional: readonly CailTenantLogFieldName[];
 }>);
+type CailCustomEventDefinitionBase = Readonly<{
+    severity: CailEventSeverity;
+    outcomes?: readonly CailOutcome[];
+    terminal_reasons?: readonly CailTerminalReason[];
+}>;
+export type CailCustomEventDefinition = (CailCustomEventDefinitionBase & Readonly<{
+    source: "platform";
+    required: readonly CailPlatformLogFieldName[];
+    optional: readonly CailPlatformLogFieldName[];
+}>) | (CailCustomEventDefinitionBase & Readonly<{
+    source: "tenant" | "both";
+    required: readonly CailTenantLogFieldName[];
+    optional: readonly CailTenantLogFieldName[];
+}>);
+export declare const CAIL_SERVICE_EVENT_BODY: "Service event recorded.";
+type CailServiceEventDefinition<Definition extends CailCustomEventDefinition> = Readonly<{
+    body: typeof CAIL_SERVICE_EVENT_BODY;
+    source: Definition["source"];
+    severity: Definition["severity"];
+    required: Definition["required"];
+    optional: Definition["optional"];
+}> & (Definition extends {
+    outcomes: infer Outcomes extends readonly CailOutcome[];
+} ? Readonly<{
+    outcomes: Outcomes;
+}> : Readonly<{
+    outcomes?: never;
+}>) & (Definition extends {
+    terminal_reasons: infer Reasons extends readonly CailTerminalReason[];
+} ? Readonly<{
+    terminal_reasons: Reasons;
+}> : Readonly<{
+    terminal_reasons?: never;
+}>);
+type CailServiceEventCatalog<Catalog extends Record<string, CailCustomEventDefinition>> = Readonly<{
+    [Event in keyof Catalog]: CailServiceEventDefinition<Catalog[Event]>;
+}>;
 export type CailEventCatalog = Readonly<Record<string, CailEventDefinition>>;
 export declare const CAIL_TENANT_FIELD_NAMES: readonly ["request_id", "action_id", "call_id", "trace", "http_method", "route", "status", "terminal", "duration_ms", "upstream_ms", "error_type", "retry_count", "req_bytes", "resp_bytes"];
 export declare const CAIL_PLATFORM_ONLY_FIELD_NAMES: readonly ["usage_id", "principal", "cohort", "key_id", "product_id", "project", "provider", "request_model", "response_model", "input_tokens", "output_tokens", "cost_micro_usd", "quota", "usage"];
@@ -220,6 +257,7 @@ export type CailEventName = (typeof CAIL_EVENTS)[keyof typeof CAIL_EVENTS];
 export declare const SLUG_RE: RegExp;
 export declare const MACHINE_ID_RE: RegExp;
 export declare const MODEL_ID_RE: RegExp;
+export declare const SUBJECT_VERSION_RE: RegExp;
 export declare const SUBJECT_RE: RegExp;
 export declare const REQUEST_ID_RE: RegExp;
 export declare const HEX_TRACE_RE: RegExp;
@@ -227,7 +265,11 @@ export declare const HEX_SPAN_RE: RegExp;
 export declare const ROUTE_TEMPLATE_RE: RegExp;
 export declare const HTTP_METHODS: readonly CailHttpMethod[];
 export declare function isPlainObject(value: unknown): value is Record<string, unknown>;
-export declare function defineEventCatalog<const Catalog extends Record<string, CailEventDefinition>>(catalog: Catalog): Readonly<Catalog>;
+export declare function defineEventCatalog<const Catalog extends Record<string, CailCustomEventDefinition>>(catalog: Catalog & {
+    readonly [Event in keyof Catalog]: Readonly<{
+        body?: never;
+    }>;
+}): CailServiceEventCatalog<Catalog>;
 export declare function isDefinedEventCatalog(value: unknown): value is CailEventCatalog;
 export declare const CAIL_EVENT_CATALOG: Readonly<{
     readonly "cail.action.admitted": {
@@ -309,6 +351,10 @@ export declare const CAIL_EVENT_CATALOG: Readonly<{
         readonly terminal_reasons: readonly ["completed"];
     };
 }>;
-export declare function extendCailEventCatalog<const Catalog extends Record<string, CailEventDefinition>>(catalog: Catalog): Readonly<typeof CAIL_EVENT_CATALOG & Catalog>;
+export declare function extendCailEventCatalog<const Catalog extends Record<string, CailCustomEventDefinition>>(catalog: Catalog & {
+    readonly [Event in keyof Catalog]: Readonly<{
+        body?: never;
+    }>;
+}): Readonly<typeof CAIL_EVENT_CATALOG & CailServiceEventCatalog<Catalog>>;
 export {};
 //# sourceMappingURL=schema.d.ts.map

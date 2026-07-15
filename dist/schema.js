@@ -1,4 +1,5 @@
-export const CAIL_LOG_SCHEMA_VERSION = 1;
+import { isSecretShaped } from "./secret-shape.js";
+export const CAIL_LOG_SCHEMA_VERSION = 2;
 export const CAIL_EVENT_INVALID = "event.invalid";
 export const CAIL_EVENT_INVALID_MESSAGE = "Event name rejected.";
 export const CAIL_SEVERITY_NUMBER = Object.freeze({
@@ -9,6 +10,7 @@ export const CAIL_SEVERITY_NUMBER = Object.freeze({
     error: 17,
     fatal: 21,
 });
+export const CAIL_SERVICE_EVENT_BODY = "Service event recorded.";
 export const CAIL_TENANT_FIELD_NAMES = Object.freeze([
     "request_id",
     "action_id",
@@ -60,7 +62,8 @@ export const CAIL_EVENTS = Object.freeze({
 export const SLUG_RE = /^[a-z0-9][a-z0-9_.-]{0,63}$/;
 export const MACHINE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 export const MODEL_ID_RE = /^(?:@[a-z0-9][a-z0-9._-]{0,31}\/)?[a-z0-9][a-z0-9._:/-]{0,95}$/;
-export const SUBJECT_RE = /^cail-[0-9a-f]{32}$/;
+export const SUBJECT_VERSION_RE = /^[a-z0-9][a-z0-9_]{0,15}$/;
+export const SUBJECT_RE = /^cail-[a-z0-9][a-z0-9_]{0,15}-[0-9a-f]{32}$/;
 export const REQUEST_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 export const HEX_TRACE_RE = /^[0-9a-f]{32}$/;
 export const HEX_SPAN_RE = /^[0-9a-f]{16}$/;
@@ -124,6 +127,7 @@ function buildEventCatalog(catalog, allowReservedCailNamespace) {
     for (const event of Object.keys(catalog)) {
         if (event === CAIL_EVENT_INVALID ||
             (!allowReservedCailNamespace && event.startsWith("cail.")) ||
+            isSecretShaped(event) ||
             !SLUG_RE.test(event)) {
             throw new TypeError("cail-log: every catalog event must be a non-reserved event slug");
         }
@@ -228,7 +232,20 @@ function buildEventCatalog(catalog, allowReservedCailNamespace) {
     return frozenCatalog;
 }
 export function defineEventCatalog(catalog) {
-    return buildEventCatalog(catalog, false);
+    if (!isPlainObject(catalog)) {
+        throw new TypeError("cail-log: event catalog must be an object");
+    }
+    const withBodies = Object.create(null);
+    for (const [event, value] of Object.entries(catalog)) {
+        if (!isPlainObject(value) || Object.hasOwn(value, "body")) {
+            throw new TypeError("cail-log: service event bodies are fixed by the library");
+        }
+        withBodies[event] = {
+            ...value,
+            body: CAIL_SERVICE_EVENT_BODY,
+        };
+    }
+    return buildEventCatalog(withBodies, false);
 }
 export function isDefinedEventCatalog(value) {
     return (typeof value === "object" &&

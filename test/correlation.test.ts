@@ -181,7 +181,7 @@ describe("L7 mint only when genuinely absent", () => {
           throw new Error("hostile header reader");
         },
       },
-      // Review M1: even PROPERTY ACCESS may be hostile.
+      // Property access itself may be hostile.
       {
         get headers(): never {
           throw new Error("hostile .headers getter");
@@ -249,7 +249,7 @@ describe("L7 tracestate forwarding (W3C §3.3)", () => {
     for (const headers of noTrace) {
       const c = correlationFromHeaders(withHeaders(headers));
       expect(c.tracestate, JSON.stringify(headers)).toBeUndefined();
-      expect(c.trace_id).not.toBe(TRACE); // minted fresh, as today
+      expect(c.trace_id).not.toBe(TRACE); // minted fresh
     }
   });
 

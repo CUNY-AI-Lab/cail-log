@@ -5,8 +5,16 @@ import {
   correlationFromHeaders,
   createCailLogger,
 } from "../dist/index.js";
+import * as packagedExports from "../dist/index.js";
+import * as sourceExports from "../src/index.js";
 
 describe("packaged dist contract", () => {
+  it("exports every public source symbol from committed dist", () => {
+    expect(Object.keys(packagedExports).sort()).toEqual(
+      Object.keys(sourceExports).sort(),
+    );
+  });
+
   it("contains a rejected async sink in the exported runtime", async () => {
     const diagnostics: string[] = [];
     const logger = createCailLogger({
@@ -14,6 +22,7 @@ describe("packaged dist contract", () => {
       release: "local",
       env: "test",
       sourceClass: "platform",
+      subjectVersion: "v1",
       catalog: CAIL_EVENT_CATALOG,
       sink: async () => {
         throw new Error("packaged sink failure");
