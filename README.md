@@ -55,13 +55,21 @@ model, key, cohort, project, provider, and other machine-identifier fields.
 
 ## Install
 
-Pin a reviewed commit while the package remains below `1.0.0`:
+The package is published to GitHub Packages under the `@cuny-ai-lab` scope.
+Add the registry mapping to the consuming repository's `.npmrc` (resolution
+only — never commit a token):
 
-```bash
-bun add github:CUNY-AI-Lab/cail-log#<commit>
+```
+@cuny-ai-lab:registry=https://npm.pkg.github.com
 ```
 
-The repository commits `dist`, so consumers do not need a package build step.
+Pin a semver range — while the package remains below `1.0.0`, for example
+`"@cuny-ai-lab/cail-log": "^0.4.0"` — then run `bun install` with
+`NODE_AUTH_TOKEN` set in the environment to a GitHub PAT that has
+`read:packages` (supplied by a user-level `~/.npmrc` or a CI secret).
+Maintainers publish with `npm publish`; `bun publish` does not authenticate
+against GitHub Packages. The published package ships `dist`, so consumers do
+not need a build step.
 
 ## Create a logger
 
