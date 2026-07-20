@@ -67,16 +67,12 @@ function sanitizeTracestate(raw: unknown): string | undefined {
   return members.length === 0 ? undefined : members.join(",");
 }
 
-function randomHex(bytes: number): string {
+function randomBytes(bytes: number): Uint8Array {
   for (let attempt = 0; attempt < RANDOM_ID_ATTEMPTS; attempt += 1) {
     const buffer = new Uint8Array(bytes);
     crypto.getRandomValues(buffer);
     if (buffer.some((byte) => byte !== 0)) {
-      let output = "";
-      for (const byte of buffer) {
-        output += byte.toString(16).padStart(2, "0");
-      }
-      return output;
+      return buffer;
     }
   }
   throw new TypeError(
@@ -84,10 +80,17 @@ function randomHex(bytes: number): string {
   );
 }
 
+function randomHex(bytes: number): string {
+  let output = "";
+  for (const byte of randomBytes(bytes)) {
+    output += byte.toString(16).padStart(2, "0");
+  }
+  return output;
+}
+
 function mintRequestId(): string {
   if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
+  const bytes = randomBytes(16);
   bytes[6] = (bytes[6]! & 0x0f) | 0x40;
   bytes[8] = (bytes[8]! & 0x3f) | 0x80;
   const hex = Array.from(bytes, (byte) =>

@@ -52,7 +52,7 @@ export type CailTerminalFields = Readonly<{
     reason: "unknown";
 }>;
 export type CailQuotaState = "fresh" | "stale";
-export type CailHttpMethod = "CONNECT" | "DELETE" | "GET" | "HEAD" | "OPTIONS" | "PATCH" | "POST" | "PUT" | "TRACE" | "_OTHER";
+export type CailHttpMethod = "CONNECT" | "DELETE" | "GET" | "HEAD" | "OPTIONS" | "PATCH" | "POST" | "PUT" | "QUERY" | "TRACE" | "_OTHER";
 export type CailQuotaKindUnit = {
     kind: "model_spend";
     unit: "micro_usd";

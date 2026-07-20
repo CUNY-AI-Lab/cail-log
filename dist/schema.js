@@ -77,6 +77,7 @@ export const HTTP_METHODS = Object.freeze([
     "PATCH",
     "POST",
     "PUT",
+    "QUERY",
     "TRACE",
     "_OTHER",
 ]);
@@ -84,7 +85,11 @@ const CONTROL_RE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 const MAX_CATALOG_MESSAGE = 160;
 const VALIDATED_EVENT_CATALOGS = new WeakSet();
 export function isPlainObject(value) {
-    return typeof value === "object" && value !== null && !Array.isArray(value);
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        return false;
+    }
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
 }
 function buildEventCatalog(catalog, allowReservedCailNamespace) {
     if (!isPlainObject(catalog)) {
@@ -163,6 +168,12 @@ function buildEventCatalog(catalog, allowReservedCailNamespace) {
         if (definition.severity === "outcome" && !required.includes("terminal")) {
             throw new TypeError("cail-log: outcome severity requires the terminal field");
         }
+        if (required.includes("key_id") && !required.includes("principal")) {
+            throw new TypeError("cail-log: required key identity requires a required principal field");
+        }
+        if (combined.includes("key_id") && !combined.includes("principal")) {
+            throw new TypeError("cail-log: key identity requires an allowed principal field");
+        }
         const allowedOutcomes = definition.outcomes
             ? [...definition.outcomes]
             : undefined;
@@ -203,9 +214,8 @@ function buildEventCatalog(catalog, allowReservedCailNamespace) {
         const possibleTerminalOutcomes = possibleOutcomes.filter((outcome) => reasonsByOutcome[outcome].some((reason) => possibleReasons.has(reason)));
         if (required.includes("terminal") &&
             required.includes("error_type") &&
-            possibleTerminalOutcomes.length > 0 &&
-            possibleTerminalOutcomes.every((outcome) => outcome === "ok")) {
-            throw new TypeError("cail-log: a required error type is incompatible with every allowed terminal fact");
+            possibleTerminalOutcomes.includes("ok")) {
+            throw new TypeError("cail-log: a required error type is incompatible with a successful terminal fact");
         }
         const frozen = {
             body: message,
@@ -237,7 +247,8 @@ export function defineEventCatalog(catalog) {
     }
     const withBodies = Object.create(null);
     for (const [event, value] of Object.entries(catalog)) {
-        if (!isPlainObject(value) || Object.hasOwn(value, "body")) {
+        if (!isPlainObject(value) ||
+            (Object.hasOwn(value, "body") && value["body"] !== undefined)) {
             throw new TypeError("cail-log: service event bodies are fixed by the library");
         }
         withBodies[event] = {

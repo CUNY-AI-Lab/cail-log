@@ -21,8 +21,10 @@ storage products still own delivery, sampling, retention, and querying.
   attributes.
 - Tenant loggers cannot claim platform identity, application, project, model,
   cost, cohort, user, or quota facts.
-- A malformed, missing, contradictory, or known-but-disallowed field drops the
-  event with a content-free diagnostic instead of creating a weaker event.
+- A malformed field container or a malformed, missing, contradictory, or
+  known-but-disallowed defined field drops the event with a content-free
+  diagnostic instead of creating a weaker event. An optional property set to
+  `undefined` is treated as omitted, matching ordinary TypeScript consumers.
 - Unknown arbitrary keys are ignored and never become log content.
 - Logging and diagnostic failures do not throw into the application path.
 - Sink selection is explicit. The Cloudflare sink emits one structured,
@@ -64,12 +66,13 @@ only — never commit a token):
 ```
 
 Pin a semver range — while the package remains below `1.0.0`, for example
-`"@cuny-ai-lab/cail-log": "^0.4.0"` — then run `bun install` with
+`"@cuny-ai-lab/cail-log": "^0.5.0"` — then run `bun install` with
 `NODE_AUTH_TOKEN` set in the environment to a GitHub PAT that has
 `read:packages` (supplied by a user-level `~/.npmrc` or a CI secret).
-Maintainers publish with `npm publish`; `bun publish` does not authenticate
-against GitHub Packages. The published package ships `dist`, so consumers do
-not need a build step.
+Maintainers publish by creating a GitHub release whose `vX.Y.Z` tag exactly
+matches `package.json`. The release workflow reruns verification and publishes
+with GitHub's scoped package token. The published package ships `dist`, so
+consumers do not need a build step.
 
 ## Create a logger
 
@@ -232,12 +235,13 @@ events. This prevents noisy test or staging traffic from sharing a production
 sampling boundary.
 
 The fleet projection intentionally omits quota values, stable user pseudonyms,
-per-event UUIDs, usage facts, and Kale tenant-project identity. Model-limit
-state and Sandbox allocation come from their authoritative accounting APIs;
-identifiable user reads are audited and resolved there on demand. Kale tenant
-state comes from its control plane. The aggregate projection retains the
-privacy-safer cohort. Blob positions 16–20 and double positions 14–20 are
-reserved for append-only schema growth.
+credential key identifiers, per-event UUIDs, usage facts, and Kale
+tenant-project identity. Model-limit state and Sandbox allocation come from
+their authoritative accounting APIs; identifiable user and credential reads
+are audited and resolved there on demand. Kale tenant state comes from its
+control plane. The aggregate projection retains the privacy-safer cohort. Blob
+positions 16–20 and double positions 14–20 are reserved for append-only schema
+growth.
 
 Analytics Engine is diagnostic only. It may sample, retains data for its native
 platform window, and cannot replace authoritative product state, model
@@ -283,6 +287,7 @@ conventions when one exists.
 | `principal.type` | `cail.principal.type` | platform |
 | `principal.subject` | `enduser.pseudo.id` | platform |
 | `cohort` | `cail.cohort.id` | platform |
+| `key_id` | `cail.key.id` | platform |
 | `product_id` | `cail.product.id` | platform |
 | `project` | `cail.kale.project.name` | platform |
 | `provider` | `gen_ai.provider.name` | platform |
@@ -295,14 +300,21 @@ conventions when one exists.
 | `usage.unit` | `cail.usage.unit` | platform |
 | `usage.quantity` | `cail.usage.quantity` | platform |
 
-HTTP methods use the OpenTelemetry known-method vocabulary plus `_OTHER`.
-Routes must be templates such as `/users/{user_id}`, never raw request paths or
-URLs, and are capped at 160 characters. Product outcome is explicit and does
-not derive from HTTP status, so an application failure returned in an HTTP 200
-response remains visible. Outcome and terminal reason must be coherent: for
-example, `ok` pairs with `completed`, while `timeout` pairs with `timeout`.
-`error.type` on an `ok` event is a contract error rather than a silently
-corrected record.
+HTTP methods use the OpenTelemetry known-method vocabulary, including `QUERY`,
+plus `_OTHER`. The `route` grammar accepts bounded path templates such as
+`/users/{user_id}` and rejects URLs, queries, and control characters. Syntax
+cannot distinguish a safe static router template from an identifier-bearing
+raw path such as `/users/stephen.zweibel`; the trusted producer must pass the
+router template and keep a raw-path canary in its tests. In portable schema 2,
+`route` emits as `url.template` for compatibility. OpenTelemetry 1.43 uses
+`http.route` for inbound server routes, so correcting that name requires a
+deliberate portable schema change rather than a patch release.
+
+Product outcome is explicit and does not derive from HTTP status, so an
+application failure returned in an HTTP 200 response remains visible. Outcome
+and terminal reason must be coherent: for example, `ok` pairs with `completed`,
+while `timeout` pairs with `timeout`. `error.type` on an `ok` event is a
+contract error rather than a silently corrected record.
 
 `principal`, `trace`, and `terminal` are atomic input facts. Their nested,
 discriminated types prevent partial or contradictory combinations before
@@ -310,6 +322,12 @@ runtime: identified users and canaries require a pseudonymous subject;
 anonymous, app, and service principals cannot carry one; trace context is
 all-or-nothing; and each outcome accepts only its closed reason set. The sink
 still emits scalar OpenTelemetry-aligned record fields and attributes.
+
+`key_id` is a credential identifier, not a secret value. It is accepted only
+with an app, service, user, or canary principal; missing and anonymous
+principals are contradictory. The identifier remains linkable security data,
+must come from the trusted authentication boundary, and is deliberately absent
+from the Analytics Engine projection.
 
 `service.name` is the emitting component. `product_id` is trusted per-event
 attribution for a fleet product such as Workbench or Site Studio. `project` is
@@ -528,7 +546,9 @@ runtime field.
 that output with committed `dist`, normalizing only source-map paths. `verify`
 runs that parity check, tests, type-checks, and package-content inspection. The
 committed CI workflow installs with the frozen Bun lockfile and runs `verify`
-on pull requests and pushes to `main`.
+on pull requests and pushes to `main`. Publishing occurs only from a GitHub
+release after the workflow verifies the release tag, package version, tests,
+types, committed `dist`, and package contents.
 
 [DESIGN.md](DESIGN.md) is the canonical architecture, security, operations,
 adoption, and rollback guide. This README is the consumer guide.

@@ -30,7 +30,7 @@ type CailAllowedReasons<Definition extends CailEventDefinition> = Definition ext
 } ? Reason : CailTerminalFields["reason"];
 type CailTerminalFor<Definition extends CailEventDefinition> = CailTerminalFields extends infer Terminal ? Terminal extends CailTerminalFields ? Terminal["outcome"] extends CailAllowedOutcomes<Definition> ? Terminal["reason"] extends CailAllowedReasons<Definition> ? Terminal : never : never : never : never;
 type CailFieldValue<Definition extends CailEventDefinition, Source extends CailSourceClass, Field extends keyof CailLogFields<Source>> = Field extends "terminal" ? CailTerminalFor<Definition> : NonNullable<CailLogFields<Source>[Field]>;
-type CailFieldsFor<Definition extends CailEventDefinition, Source extends CailSourceClass> = CailBaseFieldsFor<Definition, Source> & CailSuccessErrorConstraint<Definition>;
+type CailFieldsFor<Definition extends CailEventDefinition, Source extends CailSourceClass> = CailBaseFieldsFor<Definition, Source> & CailSuccessErrorConstraint<Definition> & CailKeyPrincipalConstraint<Definition>;
 type CailBaseFieldsFor<Definition extends CailEventDefinition, Source extends CailSourceClass> = {
     [Field in Extract<CailRequiredFieldNames<Definition>, keyof CailLogFields<Source>>]-?: CailFieldValue<Definition, Source, Field>;
 } & {
@@ -48,6 +48,19 @@ type CailSuccessErrorConstraint<Definition extends CailEventDefinition> = "termi
     }>;
     error_type?: never;
 } : unknown : unknown;
+type CailAuthenticatedPrincipalFields = Readonly<{
+    type: "user" | "canary";
+    subject: string;
+}> | Readonly<{
+    type: "app" | "service";
+    subject?: never;
+}>;
+type CailKeyPrincipalConstraint<Definition extends CailEventDefinition> = "key_id" extends CailAllowedFieldNames<Definition> ? {
+    key_id?: never;
+} | {
+    key_id: string;
+    principal: CailAuthenticatedPrincipalFields;
+} : unknown;
 type CailEmitArguments<Definition extends CailEventDefinition, Source extends CailSourceClass> = CailRequiredFieldNames<Definition> extends never ? [fields?: CailFieldsFor<Definition, Source>] : [fields: CailFieldsFor<Definition, Source>];
 export interface CailLogger<Catalog extends CailEventCatalog = CailEventCatalog, Source extends CailSourceClass = "tenant"> {
     emit<Event extends CailEventNameFor<Catalog, Source>>(event: Event, ...args: CailEmitArguments<Catalog[Event], Source>): void;

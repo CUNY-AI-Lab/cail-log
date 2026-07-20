@@ -111,6 +111,85 @@ describe("canonical event contracts", () => {
     expect(second.diagnostics).toEqual(["event_contract_error"]);
   });
 
+  it("treats optional undefined values as omitted at the public type/runtime boundary", () => {
+    const { diagnostics, events, logger } = capture();
+    logger.emit(CAIL_EVENTS.ACTION_ADMITTED, {
+      action_id: ACTION_ID,
+      product_id: "kale-workbench",
+      principal: { type: "anonymous", subject: undefined },
+      request_id: undefined,
+    });
+    logger.emit(CAIL_EVENTS.ACTION_TERMINAL, {
+      action_id: ACTION_ID,
+      product_id: "kale-workbench",
+      principal: { type: "anonymous" },
+      terminal: { outcome: "ok", reason: "completed" },
+      duration_ms: 1,
+      error_type: undefined,
+    });
+
+    const tenantCatalog = defineEventCatalog({
+      "tenant.ready": {
+        body: undefined,
+        source: "tenant",
+        severity: "info",
+        required: [],
+        optional: [],
+      },
+    });
+    const tenant = createCailLogger({
+      service: "tenant-service",
+      release: "local",
+      env: "test",
+      sourceClass: "tenant",
+      subjectVersion: undefined,
+      catalog: tenantCatalog,
+      sink: (event) => events.push(event),
+      onDiagnostic: (code) => diagnostics.push(code),
+    });
+    tenant.emit("tenant.ready");
+
+    expect(events).toHaveLength(3);
+    expect(diagnostics).toEqual([]);
+  });
+
+  it("requires key identifiers to have a non-anonymous principal", () => {
+    for (const fields of [
+      {
+        request_id: "0af7651b-16f9-4a3b-8f42-00f067aa0ba9",
+        product_id: "kale-workbench",
+        http_method: "POST",
+        route: "/v1/actions",
+        key_id: "kid-1",
+      },
+      {
+        request_id: "0af7651b-16f9-4a3b-8f42-00f067aa0ba9",
+        product_id: "kale-workbench",
+        http_method: "POST",
+        route: "/v1/actions",
+        principal: { type: "anonymous" },
+        key_id: "kid-1",
+      },
+    ]) {
+      const { diagnostics, events, logger } = capture();
+      logger.emit(CAIL_EVENTS.REQUEST_RECEIVED, fields as never);
+      expect(events).toEqual([]);
+      expect(diagnostics).toEqual(["event_contract_error"]);
+    }
+
+    const valid = capture();
+    valid.logger.emit(CAIL_EVENTS.REQUEST_RECEIVED, {
+      request_id: "0af7651b-16f9-4a3b-8f42-00f067aa0ba9",
+      product_id: "kale-workbench",
+      http_method: "POST",
+      route: "/v1/actions",
+      principal: { type: "app" },
+      key_id: "kid-1",
+    });
+    expect(valid.events).toHaveLength(1);
+    expect(valid.diagnostics).toEqual([]);
+  });
+
   it("drops a known field that is not allowed for that event", () => {
     const { diagnostics, events, logger } = capture();
     logger.emit(CAIL_EVENTS.ACTION_ADMITTED, {
@@ -180,6 +259,54 @@ describe("catalog and sink gates", () => {
         },
       }),
     ).toThrow(TypeError);
+  });
+
+  it("rejects any catalog state where success requires an error type", () => {
+    for (const definition of [
+      {
+        source: "platform",
+        severity: "outcome",
+        required: ["terminal", "error_type"],
+        optional: [],
+      },
+      {
+        source: "platform",
+        severity: "outcome",
+        required: ["terminal", "error_type"],
+        optional: [],
+        outcomes: ["ok", "error"],
+        terminal_reasons: ["completed", "application_failure"],
+      },
+    ] as const) {
+      expect(() =>
+        defineEventCatalog({
+          "bad.dead_success": definition,
+        }),
+      ).toThrow(TypeError);
+    }
+  });
+
+  it("rejects a catalog that exposes key identity without principal semantics", () => {
+    for (const definition of [
+      {
+        source: "platform",
+        severity: "info",
+        required: [],
+        optional: ["key_id"],
+      },
+      {
+        source: "platform",
+        severity: "info",
+        required: ["key_id"],
+        optional: ["principal"],
+      },
+    ] as const) {
+      expect(() =>
+        defineEventCatalog({
+          "bad.key_without_principal": definition,
+        }),
+      ).toThrow(TypeError);
+    }
   });
 
   it("requires callers to choose a sink explicitly", () => {

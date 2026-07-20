@@ -126,7 +126,8 @@ type CailFieldsFor<
   Definition extends CailEventDefinition,
   Source extends CailSourceClass,
 > = CailBaseFieldsFor<Definition, Source> &
-  CailSuccessErrorConstraint<Definition>;
+  CailSuccessErrorConstraint<Definition> &
+  CailKeyPrincipalConstraint<Definition>;
 
 type CailBaseFieldsFor<
   Definition extends CailEventDefinition,
@@ -166,6 +167,20 @@ type CailSuccessErrorConstraint<Definition extends CailEventDefinition> =
               error_type?: never;
             }
       : unknown
+    : unknown;
+
+type CailAuthenticatedPrincipalFields =
+  | Readonly<{ type: "user" | "canary"; subject: string }>
+  | Readonly<{ type: "app" | "service"; subject?: never }>;
+
+type CailKeyPrincipalConstraint<Definition extends CailEventDefinition> =
+  "key_id" extends CailAllowedFieldNames<Definition>
+    ?
+        | { key_id?: never }
+        | {
+            key_id: string;
+            principal: CailAuthenticatedPrincipalFields;
+          }
     : unknown;
 
 type CailEmitArguments<
@@ -385,10 +400,13 @@ function sanitizePrincipal(value: unknown, subjectVersion: string | undefined):
     | "service"
     | "canary"
     | "anonymous";
-  const hasSubject = Object.hasOwn(value, "subject");
+  const subjectValue = Object.hasOwn(value, "subject")
+    ? value["subject"]
+    : undefined;
+  const hasSubject = subjectValue !== undefined;
   if (principalType === "user" || principalType === "canary") {
     if (subjectVersion === undefined) return undefined;
-    const subject = sanitizePattern(value["subject"], SUBJECT_RE);
+    const subject = sanitizePattern(subjectValue, SUBJECT_RE);
     return subject === undefined ||
       !subject.startsWith(`cail-${subjectVersion}-`)
       ? undefined
@@ -507,16 +525,29 @@ function buildEvent(
     return undefined;
   }
 
-  const input: Record<string, unknown> = isPlainObject(fields) ? fields : {};
+  let rawInput: Record<string, unknown>;
+  if (fields === undefined) {
+    rawInput = {};
+  } else if (isPlainObject(fields)) {
+    rawInput = fields;
+  } else {
+    report("event_contract_error");
+    return undefined;
+  }
   const allowed = new Set<string>([
     ...definition.required,
     ...definition.optional,
   ]);
-  for (const key of Object.keys(input)) {
-    if (KNOWN_FIELDS.has(key) && !allowed.has(key)) {
+  const input = Object.create(null) as Record<string, unknown>;
+  for (const key of KNOWN_FIELDS) {
+    if (!Object.hasOwn(rawInput, key)) continue;
+    const value = rawInput[key];
+    if (value === undefined) continue;
+    if (!allowed.has(key)) {
       report("event_contract_error");
       return undefined;
     }
+    input[key] = value;
   }
 
   const attributes: Record<string, CailLogAttributeValue> = {
@@ -619,8 +650,11 @@ function buildEvent(
 
   const outcome = attributes["cail.outcome"] as CailOutcome | undefined;
   const terminalReason = attributes["cail.outcome.reason"];
+  const principalType = attributes["cail.principal.type"];
   if (
     (outcome === "ok" && attributes["error.type"] !== undefined) ||
+    (attributes["cail.key.id"] !== undefined &&
+      (principalType === undefined || principalType === "anonymous")) ||
     (definition.outcomes !== undefined &&
       (outcome === undefined || !definition.outcomes.includes(outcome))) ||
     (definition.terminal_reasons !== undefined &&
@@ -699,7 +733,7 @@ export function createCailLogger<
   }
   if (
     options.sourceClass === "tenant" &&
-    Object.hasOwn(options, "subjectVersion")
+    options.subjectVersion !== undefined
   ) {
     throw new TypeError(
       "cail-log: tenant loggers must not configure a subjectVersion",

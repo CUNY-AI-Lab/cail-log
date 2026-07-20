@@ -89,6 +89,7 @@ export type CailHttpMethod =
   | "PATCH"
   | "POST"
   | "PUT"
+  | "QUERY"
   | "TRACE"
   | "_OTHER";
 
@@ -388,6 +389,7 @@ export const HTTP_METHODS: readonly CailHttpMethod[] = Object.freeze([
   "PATCH",
   "POST",
   "PUT",
+  "QUERY",
   "TRACE",
   "_OTHER",
 ]);
@@ -399,7 +401,12 @@ const VALIDATED_EVENT_CATALOGS = new WeakSet<object>();
 export function isPlainObject(
   value: unknown,
 ): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 function buildEventCatalog<
@@ -506,6 +513,16 @@ function buildEventCatalog<
         "cail-log: outcome severity requires the terminal field",
       );
     }
+    if (required.includes("key_id") && !required.includes("principal")) {
+      throw new TypeError(
+        "cail-log: required key identity requires a required principal field",
+      );
+    }
+    if (combined.includes("key_id") && !combined.includes("principal")) {
+      throw new TypeError(
+        "cail-log: key identity requires an allowed principal field",
+      );
+    }
 
     const allowedOutcomes = definition.outcomes
       ? [...definition.outcomes]
@@ -577,11 +594,10 @@ function buildEventCatalog<
     if (
       required.includes("terminal") &&
       required.includes("error_type") &&
-      possibleTerminalOutcomes.length > 0 &&
-      possibleTerminalOutcomes.every((outcome) => outcome === "ok")
+      possibleTerminalOutcomes.includes("ok")
     ) {
       throw new TypeError(
-        "cail-log: a required error type is incompatible with every allowed terminal fact",
+        "cail-log: a required error type is incompatible with a successful terminal fact",
       );
     }
 
@@ -625,7 +641,10 @@ export function defineEventCatalog<
     CailEventDefinition
   >;
   for (const [event, value] of Object.entries(catalog)) {
-    if (!isPlainObject(value) || Object.hasOwn(value, "body")) {
+    if (
+      !isPlainObject(value) ||
+      (Object.hasOwn(value, "body") && value["body"] !== undefined)
+    ) {
       throw new TypeError(
         "cail-log: service event bodies are fixed by the library",
       );

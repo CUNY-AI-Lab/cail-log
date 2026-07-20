@@ -46,10 +46,12 @@ namespace is library-owned. A service-local catalog cannot supply a body;
 every local event receives `Service event recorded.` Types reject a `body`
 property, and runtime validation rejects it when types are bypassed.
 
-An event with a malformed, missing, contradictory, or known-but-disallowed
-field is dropped with `event_contract_error`. Unknown arbitrary keys are
-ignored and never become attributes. An unknown event name produces the fixed
-`event.invalid` record without echoing the rejected name.
+An event with a malformed container or a malformed, missing, contradictory, or
+known-but-disallowed defined field is dropped with `event_contract_error`.
+Optional properties set to `undefined` are treated as omitted, matching the
+public TypeScript contract. Unknown arbitrary keys are ignored and never
+become attributes. An unknown event name produces the fixed `event.invalid`
+record without echoing the rejected name.
 
 Every public console sink, projection helper, Analytics Engine sink, and
 `fanoutSinks()` checks an instance-local opaque provenance mark. A structural
@@ -92,8 +94,10 @@ structured object.
 The supported input surface has no general message, attributes bag, headers,
 raw URL, exception, filename, prompt, completion, IP address, user agent,
 email, or IdP-subject field. Control characters and line separators are
-rejected in string fields. Routes are bounded templates such as
-`/users/{user_id}`, never raw request paths.
+rejected in string fields. The route grammar accepts bounded path templates
+such as `/users/{user_id}` and rejects URLs and queries, but it cannot
+distinguish a safe static router template from an identifier-bearing raw path.
+Trusted producers must pass router-owned templates and test a raw-path canary.
 
 String validation combines a field grammar with a detector for common secret
 token shapes. Regression canaries include PII-shaped content, secret shapes
@@ -115,6 +119,11 @@ subject, or unkeyed digest. This library validates representation and configured
 version, not HMAC provenance. Cohorts are preferred when a per-person view is
 not required.
 
+Credential `key_id` values require a non-anonymous principal and trusted
+authentication-boundary provenance. They are identifiers rather than secret
+material, but remain linkable security data that needs access and retention
+controls.
+
 ## Identity, routing, and state invariants
 
 `service.name` is the constructor-owned emitting component.
@@ -132,6 +141,8 @@ Only the canonical settled event asserts accounting acknowledgement.
 Product outcome and terminal reason form one closed fact. Success pairs only
 with `completed` and cannot carry `error.type`. Product outcome is not inferred
 from HTTP status; an application failure may legitimately have HTTP 200.
+HTTP method validation includes the OpenTelemetry 1.43 known methods, including
+`QUERY`, plus `_OTHER`.
 
 The logger does not retry or deduplicate sink delivery and cannot resolve an
 ambiguous outcome. The producer's durable state transition and idempotency key
@@ -169,8 +180,14 @@ Analytics Engine dataset `cail_fleet_events_v1` has its own projection schema
 version 1. Blob and double positions are append-only and exported as one-based
 constants. The point index is environment plus trusted product ID, with a
 namespaced service fallback. Stable user pseudonyms, per-event UUIDs, quota
-tuples, settled usage, and Kale project identity are deliberately omitted.
-Reserved positions remain empty for append-only growth.
+tuples, credential key identifiers, settled usage, and Kale project identity
+are deliberately omitted. Reserved positions remain empty for append-only
+growth.
+
+Portable schema 2 maps the generic `route` input to `url.template`.
+OpenTelemetry 1.43 defines stable inbound server route semantics as
+`http.route`; changing the emitted key requires a new portable schema and
+coordinated collector fixtures. It is not part of a patch release.
 
 Analytics Engine is sampled diagnostic storage. Weighted aggregate queries
 must use `_sample_interval` and expose sampling evidence. It cannot prove
@@ -211,8 +228,9 @@ collector support for both versions or a pause in emission while consumers are
 reverted. Analytics Engine retains projection schema 1 and records portable log
 schema 2 in its existing `log_schema_version` double column.
 
-The package remains below 1.0. Pin a reviewed commit. Do not publish or deploy
-from an unverified checkout.
+The package remains below 1.0. Consumers pin a reviewed semver range and commit
+their resolved lockfile; git-SHA consumers require an explicit pin update.
+Do not publish or deploy from an unverified checkout.
 
 ## External activation requirements
 
@@ -236,7 +254,9 @@ durable production data is changed by this repository's build or test suite.
 committed `dist`, runs all tests, type-checks source and tests, and inspects the
 package contents. CI installs from the frozen Bun lockfile and runs the same
 command on pull requests and pushes to `main`. The parity test also injects a
-stale generated file and proves the check fails.
+stale generated file and proves the check fails. GitHub Packages publishing is
+restricted to a published GitHub release, reruns `verify`, and fails unless the
+release tag exactly matches `v<package version>`.
 
 Runtime rollback is a producer and collector deployment operation. Logging is
 non-authoritative, so loss of a diagnostic sink does not roll back application

@@ -136,6 +136,23 @@ describe("type-level event contract", () => {
         // @ts-expect-error trace context is atomic
         trace: { trace_id: "0af7651916cd43dd8448eb211c80319c" },
       });
+      // @ts-expect-error a key identifier cannot be anonymous
+      platform.emit(CAIL_EVENTS.REQUEST_RECEIVED, {
+        request_id: "0af7651b-16f9-4a3b-8f42-00f067aa0ba9",
+        product_id: "kale-workbench",
+        http_method: "POST",
+        route: "/v1/actions",
+        principal: { type: "anonymous" },
+        key_id: "kid-1",
+      });
+      // @ts-expect-error a key identifier requires a principal
+      platform.emit(CAIL_EVENTS.REQUEST_RECEIVED, {
+        request_id: "0af7651b-16f9-4a3b-8f42-00f067aa0ba9",
+        product_id: "kale-workbench",
+        http_method: "POST",
+        route: "/v1/actions",
+        key_id: "kid-1",
+      });
       // @ts-expect-error sink selection is required
       createCailLogger({
         service: "bad", release: "local", env: "test",

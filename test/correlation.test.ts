@@ -122,6 +122,61 @@ describe("L7 mint only when genuinely absent", () => {
     random.mockRestore();
   });
 
+  it("retries all-zero UUID fallback entropy and fails boundedly", () => {
+    const originalCrypto = Object.getOwnPropertyDescriptor(
+      globalThis,
+      "crypto",
+    );
+    let calls = 0;
+    Object.defineProperty(globalThis, "crypto", {
+      configurable: true,
+      value: {
+        getRandomValues(array: ArrayBufferView) {
+          calls += 1;
+          const bytes = new Uint8Array(
+            array.buffer,
+            array.byteOffset,
+            array.byteLength,
+          );
+          bytes.fill(calls === 3 ? 0 : 1);
+          return array;
+        },
+      },
+    });
+    try {
+      const correlation = correlationFromHeaders(withHeaders({}));
+      expect(correlation.request_id).toMatch(UUID);
+      expect(correlation.request_id).not.toBe(
+        "00000000-0000-4000-8000-000000000000",
+      );
+
+      calls = 0;
+      Object.defineProperty(globalThis, "crypto", {
+        configurable: true,
+        value: {
+          getRandomValues(array: ArrayBufferView) {
+            calls += 1;
+            const bytes = new Uint8Array(
+              array.buffer,
+              array.byteOffset,
+              array.byteLength,
+            );
+            bytes.fill(calls <= 2 ? 1 : 0);
+            return array;
+          },
+        },
+      });
+      expect(() => correlationFromHeaders(withHeaders({}))).toThrow(TypeError);
+      expect(calls).toBe(10);
+    } finally {
+      if (originalCrypto === undefined) {
+        Reflect.deleteProperty(globalThis, "crypto");
+      } else {
+        Object.defineProperty(globalThis, "crypto", originalCrypto);
+      }
+    }
+  });
+
   it("L7f2 does not adopt the response-only x-request-id compatibility alias", () => {
     const c = correlationFromHeaders(withHeaders({ "x-request-id": RID }));
     expect(c.request_id).not.toBe(RID);

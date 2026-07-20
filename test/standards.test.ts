@@ -28,6 +28,17 @@ function capture() {
 }
 
 describe("OpenTelemetry-aligned record", () => {
+  it("accepts the pinned semantic convention's QUERY method", () => {
+    const { events, logger } = capture();
+    logger.emit(CAIL_EVENTS.REQUEST_RECEIVED, {
+      request_id: REQUEST_ID,
+      product_id: "kale-workbench",
+      http_method: "QUERY",
+      route: "/search",
+    });
+    expect(events[0]?.attributes["http.request.method"]).toBe("QUERY");
+  });
+
   it("separates resources, record fields, trace context, and attributes", () => {
     const { events, logger } = capture();
     logger.emit(CAIL_EVENTS.REQUEST_COMPLETED, {

@@ -1,15 +1,15 @@
-name: CI
+name: Publish
 
 on:
-  pull_request:
-  push:
-    branches: [main]
+  release:
+    types: [published]
 
 permissions:
   contents: read
+  packages: write
 
 jobs:
-  verify:
+  publish:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -21,7 +21,14 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 20
+          registry-url: https://npm.pkg.github.com
+          scope: "@cuny-ai-lab"
       - run: bun install --frozen-lockfile --ignore-scripts
       - run: bun run verify
-      - name: Smoke test the built package on the declared Node baseline
-        run: node --input-type=module -e "const cailLog = await import('./dist/index.js'); if (cailLog.CAIL_LOG_SCHEMA_VERSION !== 2) process.exit(1)"
+      - name: Verify release tag matches package version
+        run: |
+          PACKAGE_VERSION="$(bun -p "require('./package.json').version")"
+          test "v${PACKAGE_VERSION}" = "${GITHUB_REF_NAME}"
+      - run: bun publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -5,6 +5,7 @@ import {
   CAIL_EVENTS,
   Sensitive,
   createCailLogger,
+  defineEventCatalog,
   isSensitive,
   jsonLineSink,
   sensitive,
@@ -42,6 +43,35 @@ function capture() {
 afterEach(() => vi.restoreAllMocks());
 
 describe("strict field behavior", () => {
+  it("drops a malformed fields container even when the event has no required fields", () => {
+    const catalog = defineEventCatalog({
+      "test.empty": {
+        source: "tenant",
+        severity: "info",
+        required: [],
+        optional: [],
+      },
+    });
+    for (const fields of [null, 42, "content", new Date()]) {
+      const events: CailLogEvent[] = [];
+      const diagnostics: string[] = [];
+      const logger = createCailLogger({
+        service: "workbench",
+        release: "local",
+        env: "test",
+        sourceClass: "tenant",
+        catalog,
+        sink: (event) => events.push(event),
+        onDiagnostic: (code) => diagnostics.push(code),
+      });
+      logger.emit("test.empty", fields as never);
+      expect(events, Object.prototype.toString.call(fields)).toEqual([]);
+      expect(diagnostics, Object.prototype.toString.call(fields)).toEqual([
+        "event_contract_error",
+      ]);
+    }
+  });
+
   it("drops malformed allowed values instead of weakening the event", () => {
     const { diagnostics, events, logger } = capture();
     logger.emit(CAIL_EVENTS.ACTION_ADMITTED, {
@@ -93,6 +123,33 @@ describe("strict field behavior", () => {
     });
     expect(events).toEqual([]);
     expect(diagnostics).toEqual(["event_dropped"]);
+  });
+
+  it("does not evaluate or suppress an event for an unknown hostile getter", () => {
+    const { diagnostics, events, logger } = capture();
+    let reads = 0;
+    logger.emit(CAIL_EVENTS.ACTION_ADMITTED, {
+      ...actionFields(),
+      get prompt(): string {
+        reads += 1;
+        throw new Error("student essay");
+      },
+    } as never);
+    expect(reads).toBe(0);
+    expect(events).toHaveLength(1);
+    expect(diagnostics).toEqual([]);
+  });
+
+  it("inspects a fixed field set without enumerating caller-owned keys", () => {
+    const { diagnostics, events, logger } = capture();
+    const fields = new Proxy(actionFields(), {
+      ownKeys() {
+        throw new Error("unbounded caller key enumeration");
+      },
+    });
+    logger.emit(CAIL_EVENTS.ACTION_ADMITTED, fields);
+    expect(events).toHaveLength(1);
+    expect(diagnostics).toEqual([]);
   });
 });
 
