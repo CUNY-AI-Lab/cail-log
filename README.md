@@ -65,8 +65,8 @@ only — never commit a token):
 @cuny-ai-lab:registry=https://npm.pkg.github.com
 ```
 
-Pin a semver range — while the package remains below `1.0.0`, for example
-`"@cuny-ai-lab/cail-log": "^0.5.0"` — then run `bun install` with
+Pin the reviewed release exactly — while the package remains below `1.0.0`,
+for example `"@cuny-ai-lab/cail-log": "0.6.0"` — then run `bun install` with
 `NODE_AUTH_TOKEN` set in the environment to a GitHub PAT that has
 `read:packages` (supplied by a user-level `~/.npmrc` or a CI secret).
 Maintainers publish by creating a GitHub release whose `vX.Y.Z` tag exactly
@@ -345,6 +345,13 @@ policy-defined `cohort` when a per-person view is not necessary. This package
 does not derive the HMAC or prove identity-boundary provenance. The trusted
 identity boundary owns keyed derivation and version coordination; it must never
 use an email local part, raw IdP subject, or unkeyed digest.
+
+Use `isOperationalLogSubject` only to validate stored or transported event
+data. It does not derive the pseudonym. The trusted identity boundary must
+perform the separate keyed derivation documented above. The packaged
+`contract/operational-event-v2.json` fixture pins distinct ownership and log
+pseudonym payloads, correlation headers, event shape, and forbidden unsafe
+fields.
 
 ### Numeric field semantics
 

@@ -228,7 +228,7 @@ collector support for both versions or a pause in emission while consumers are
 reverted. Analytics Engine retains projection schema 1 and records portable log
 schema 2 in its existing `log_schema_version` double column.
 
-The package remains below 1.0. Consumers pin a reviewed semver range and commit
+The package remains below 1.0. Consumers pin a reviewed release exactly and commit
 their resolved lockfile; git-SHA consumers require an explicit pin update.
 Do not publish or deploy from an unverified checkout.
 

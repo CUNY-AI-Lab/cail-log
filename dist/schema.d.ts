@@ -1,4 +1,6 @@
 export declare const CAIL_LOG_SCHEMA_VERSION: 2;
+/** Current version tag for privacy-bounded operational subject pseudonyms. */
+export declare const CAIL_OPERATIONAL_SUBJECT_VERSION: "v1";
 export declare const CAIL_EVENT_INVALID: "event.invalid";
 export declare const CAIL_EVENT_INVALID_MESSAGE: "Event name rejected.";
 export type CailLogLevel = "fatal" | "error" | "warn" | "info" | "debug" | "trace";
@@ -264,6 +266,8 @@ export declare const HEX_TRACE_RE: RegExp;
 export declare const HEX_SPAN_RE: RegExp;
 export declare const ROUTE_TEMPLATE_RE: RegExp;
 export declare const HTTP_METHODS: readonly CailHttpMethod[];
+/** True only for the versioned pseudonym allowed in operational events. */
+export declare function isOperationalLogSubject(value: unknown): value is string;
 export declare function isPlainObject(value: unknown): value is Record<string, unknown>;
 export declare function defineEventCatalog<const Catalog extends Record<string, CailCustomEventDefinition>>(catalog: Catalog & {
     readonly [Event in keyof Catalog]: Readonly<{

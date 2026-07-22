@@ -2,6 +2,9 @@ import { isSecretShaped } from "./secret-shape.js";
 
 export const CAIL_LOG_SCHEMA_VERSION = 2 as const;
 
+/** Current version tag for privacy-bounded operational subject pseudonyms. */
+export const CAIL_OPERATIONAL_SUBJECT_VERSION = "v1" as const;
+
 export const CAIL_EVENT_INVALID = "event.invalid" as const;
 export const CAIL_EVENT_INVALID_MESSAGE = "Event name rejected." as const;
 
@@ -393,6 +396,11 @@ export const HTTP_METHODS: readonly CailHttpMethod[] = Object.freeze([
   "TRACE",
   "_OTHER",
 ]);
+
+/** True only for the versioned pseudonym allowed in operational events. */
+export function isOperationalLogSubject(value: unknown): value is string {
+  return typeof value === "string" && SUBJECT_RE.test(value);
+}
 
 const CONTROL_RE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 const MAX_CATALOG_MESSAGE = 160;

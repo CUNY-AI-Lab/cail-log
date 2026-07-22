@@ -398,7 +398,7 @@ createCailLogger({
     };
     expect(packageJson.scripts["verify"]).toContain("check:dist");
     expect(packageJson.scripts["prepublishOnly"]).toBe("bun run verify");
-    expect(packageJson.version).toBe("0.5.0");
+    expect(packageJson.version).toBe("0.6.0");
     expect(existsSync(".github/workflows/ci.yml")).toBe(true);
     const ciWorkflow = readFileSync(".github/workflows/ci.yml", "utf8");
     expect(ciWorkflow).toContain("bun run verify");
