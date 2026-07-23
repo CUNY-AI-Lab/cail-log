@@ -95,6 +95,148 @@ describe("validated event provenance", () => {
 });
 
 describe("content-free service catalogs", () => {
+  it("snapshots every logger option once before validation and emission", () => {
+    const safeCatalog = defineEventCatalog({
+      "service.ready": {
+        source: "tenant",
+        severity: "info",
+        required: [],
+        optional: [],
+      },
+    });
+    const forgedCatalog = Object.freeze({
+      "service.leak": Object.freeze({
+        body: "private-body-sentinel",
+        source: "tenant",
+        severity: "info",
+        required: Object.freeze([]),
+        optional: Object.freeze([]),
+      }),
+    });
+    const events: CailLogEvent[] = [];
+    const diagnostics: string[] = [];
+    const reads = new Map<string, number>();
+    const changing = <Value>(name: string, first: Value, later: Value) => {
+      const count = (reads.get(name) ?? 0) + 1;
+      reads.set(name, count);
+      return count === 1 ? first : later;
+    };
+
+    const logger = createCailLogger({
+      get service() {
+        return changing("service", "fixture-service", "private-service");
+      },
+      get release() {
+        return changing("release", "fixture", "private-release");
+      },
+      get env() {
+        return changing("env", "test" as const, "student-secret" as never);
+      },
+      get sourceClass() {
+        return changing("sourceClass", "tenant" as const, "platform" as never);
+      },
+      get subjectVersion() {
+        return changing("subjectVersion", undefined, "private-version" as never);
+      },
+      get catalog() {
+        return changing("catalog", safeCatalog, forgedCatalog as never);
+      },
+      get sink() {
+        return changing(
+          "sink",
+          (event: CailLogEvent) => events.push(event),
+          () => {
+            throw new Error("private-sink-sentinel");
+          },
+        );
+      },
+      get onDiagnostic() {
+        return changing(
+          "onDiagnostic",
+          (code: string) => diagnostics.push(code),
+          () => {
+            throw new Error("private-diagnostic-sentinel");
+          },
+        );
+      },
+      get clock() {
+        return changing(
+          "clock",
+          () => Date.UTC(2026, 6, 22, 12),
+          () => {
+            throw new Error("private-clock-sentinel");
+          },
+        );
+      },
+    });
+
+    logger.emit("service.ready");
+
+    expect(Object.fromEntries(reads)).toEqual({
+      service: 1,
+      release: 1,
+      env: 1,
+      sourceClass: 1,
+      subjectVersion: 1,
+      catalog: 1,
+      sink: 1,
+      onDiagnostic: 1,
+      clock: 1,
+    });
+    expect(diagnostics).toEqual([]);
+    expect(events).toEqual([
+      {
+        schema_version: 2,
+        timestamp: "2026-07-22T12:00:00.000Z",
+        severity_text: "INFO",
+        severity_number: 9,
+        event_name: "service.ready",
+        body: "Service event recorded.",
+        resource: {
+          "service.namespace": "cuny-ai-lab",
+          "service.name": "fixture-service",
+          "service.version": "fixture",
+          "deployment.environment.name": "test",
+        },
+        attributes: {
+          "cail.source.class": "tenant",
+        },
+      },
+    ]);
+    expect(JSON.stringify({ diagnostics, events })).not.toContain("private");
+    expect(JSON.stringify({ diagnostics, events })).not.toContain("student");
+  });
+
+  it("contains hostile logger option access and reflection", () => {
+    const getterSentinel = "private-option-getter-sentinel";
+    const proxySentinel = "private-option-proxy-sentinel";
+    const hostileGetter = {
+      get service(): never {
+        throw new Error(getterSentinel);
+      },
+    };
+    const hostileProxy = new Proxy(
+      {},
+      {
+        getPrototypeOf() {
+          throw new Error(proxySentinel);
+        },
+      },
+    );
+
+    for (const options of [hostileGetter, hostileProxy]) {
+      let thrown: unknown;
+      try {
+        createCailLogger(options as never);
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(TypeError);
+      expect(String(thrown)).not.toContain(getterSentinel);
+      expect(String(thrown)).not.toContain(proxySentinel);
+    }
+  });
+
   it("assigns one library-owned body to service-defined events", () => {
     const catalog = defineEventCatalog({
       "service.ready": {

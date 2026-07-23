@@ -21,7 +21,7 @@
     "event_name": "cail.action.admitted",
     "body": "Action admitted.",
     "resource": {
-      "service.namespace": "cail",
+      "service.namespace": "cuny-ai-lab",
       "service.name": "fixture-service",
       "service.version": "fixture",
       "deployment.environment.name": "test"
@@ -29,7 +29,8 @@
     "attributes": {
       "cail.source.class": "platform",
       "cail.request.id": "11111111-1111-4111-8111-111111111111",
-      "cail.action.id": "action-fixture",
+      "cail.action.id": "9f50d4a4-ef70-41b2-b225-0a5cbf2df5e7",
+      "cail.product.id": "kale-workbench",
       "cail.principal.type": "user",
       "enduser.pseudo.id": "cail-v1-fedcba9876543210fedcba9876543210"
     }

@@ -206,6 +206,17 @@ type FieldDefinition = readonly [output: keyof CailLogAttributes, clean: Sanitiz
 type MutableCailLogEvent = {
   -readonly [Key in keyof CailLogEvent]: CailLogEvent[Key];
 };
+type CailLoggerOptionsSnapshot = Readonly<{
+  service: unknown;
+  release: unknown;
+  env: unknown;
+  sourceClass: unknown;
+  subjectVersion: unknown;
+  catalog: unknown;
+  sink: unknown;
+  onDiagnostic: unknown;
+  clock: unknown;
+}>;
 
 function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   return (
@@ -223,6 +234,28 @@ const ENVIRONMENTS: ReadonlySet<string> = new Set([
 ]);
 const SOURCE_CLASSES: ReadonlySet<string> = new Set(["platform", "tenant"]);
 const KNOWN_FIELDS: ReadonlySet<string> = new Set(CAIL_PLATFORM_FIELD_NAMES);
+
+function snapshotLoggerOptions(options: unknown): CailLoggerOptionsSnapshot {
+  try {
+    if (!isPlainObject(options)) {
+      throw new TypeError("invalid logger options");
+    }
+    return Object.freeze({
+      service: options["service"],
+      release: options["release"],
+      env: options["env"],
+      sourceClass: options["sourceClass"],
+      subjectVersion: options["subjectVersion"],
+      catalog: options["catalog"],
+      sink: options["sink"],
+      onDiagnostic: options["onDiagnostic"],
+      clock: options["clock"],
+    });
+  } catch {
+    throw new TypeError("cail-log: options must be a readable plain object");
+  }
+}
+
 function sanitizePattern(value: unknown, pattern: RegExp): string | undefined {
   if (isSensitive(value) || typeof value !== "string") return undefined;
   if (isSecretShaped(value)) return undefined;
@@ -702,84 +735,81 @@ export function createCailLogger<
 >(
   options: CailLoggerOptions<Catalog, Source>,
 ): CailLogger<Catalog, Source> {
-  if (!isPlainObject(options)) {
-    throw new TypeError("cail-log: options must be an object");
-  }
+  const configured = snapshotLoggerOptions(options);
 
-  const service = sanitizePattern(options.service, SLUG_RE);
-  const release = sanitizePattern(options.release, MACHINE_ID_RE);
+  const service = sanitizePattern(configured.service, SLUG_RE);
+  const release = sanitizePattern(configured.release, MACHINE_ID_RE);
   if (service === undefined) {
     throw new TypeError("cail-log: service must be a slug");
   }
   if (release === undefined) {
     throw new TypeError("cail-log: release must be a machine identifier");
   }
-  if (!ENVIRONMENTS.has(options.env)) {
+  if (
+    typeof configured.env !== "string" ||
+    !ENVIRONMENTS.has(configured.env)
+  ) {
     throw new TypeError(
       "cail-log: env must be production, staging, development, or test",
     );
   }
-  if (!SOURCE_CLASSES.has(options.sourceClass)) {
+  if (
+    typeof configured.sourceClass !== "string" ||
+    !SOURCE_CLASSES.has(configured.sourceClass)
+  ) {
     throw new TypeError("cail-log: sourceClass must be platform or tenant");
   }
+  const env = configured.env as CailLogEnvironment;
+  const sourceClass = configured.sourceClass as CailSourceClass;
   const subjectVersion = sanitizePattern(
-    options.subjectVersion,
+    configured.subjectVersion,
     SUBJECT_VERSION_RE,
   );
-  if (options.sourceClass === "platform" && subjectVersion === undefined) {
+  if (sourceClass === "platform" && subjectVersion === undefined) {
     throw new TypeError(
       "cail-log: platform loggers require a subjectVersion",
     );
   }
   if (
-    options.sourceClass === "tenant" &&
-    options.subjectVersion !== undefined
+    sourceClass === "tenant" &&
+    configured.subjectVersion !== undefined
   ) {
     throw new TypeError(
       "cail-log: tenant loggers must not configure a subjectVersion",
     );
   }
-  let configuredSink: CailLogSink | undefined;
-  let configuredClock: (() => number) | undefined;
-  let configuredDiagnostic: CailLogDiagnosticSink | undefined;
-  try {
-    configuredSink = options.sink;
-    configuredClock = options.clock;
-    configuredDiagnostic = options.onDiagnostic;
-  } catch {
-    throw new TypeError("cail-log: callback options must be readable");
-  }
-
-  if (typeof configuredSink !== "function") {
+  if (typeof configured.sink !== "function") {
     throw new TypeError("cail-log: sink must be an explicit function");
   }
-  if (configuredClock !== undefined && typeof configuredClock !== "function") {
+  if (configured.clock !== undefined && typeof configured.clock !== "function") {
     throw new TypeError("cail-log: clock must be a function");
   }
   if (
-    configuredDiagnostic !== undefined &&
-    typeof configuredDiagnostic !== "function"
+    configured.onDiagnostic !== undefined &&
+    typeof configured.onDiagnostic !== "function"
   ) {
     throw new TypeError("cail-log: onDiagnostic must be a function");
   }
 
-  if (!isDefinedEventCatalog(options.catalog)) {
+  if (!isDefinedEventCatalog(configured.catalog)) {
     throw new TypeError(
       "cail-log: catalog must come from defineEventCatalog, extendCailEventCatalog, or CAIL_EVENT_CATALOG",
     );
   }
-  const catalog = options.catalog as Catalog;
-  const sink = configuredSink;
-  const clock = configuredClock ?? Date.now;
-  const onDiagnostic = configuredDiagnostic;
+  const catalog = configured.catalog as Catalog;
+  const sink = configured.sink as CailLogSink;
+  const clock = (configured.clock as (() => number) | undefined) ?? Date.now;
+  const onDiagnostic = configured.onDiagnostic as
+    | CailLogDiagnosticSink
+    | undefined;
   const context: LoggerContext = {
-    sourceClass: options.sourceClass,
+    sourceClass,
     subjectVersion,
     resource: Object.freeze({
       "service.namespace": "cuny-ai-lab",
       "service.name": service,
       "service.version": release,
-      "deployment.environment.name": options.env,
+      "deployment.environment.name": env,
     }),
   };
 

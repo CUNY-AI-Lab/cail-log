@@ -92,6 +92,25 @@ describe("L7 mint only when genuinely absent", () => {
     ).toMatch(/-00$/);
   });
 
+  it("snapshots a recording decision once and contains hostile access", () => {
+    let reads = 0;
+    const changing = correlationFromHeaders(withHeaders({}), {
+      get sampled() {
+        reads += 1;
+        return reads === 1;
+      },
+    });
+    expect(reads).toBe(1);
+    expect(changing.trace_flags).toBe(1);
+
+    const hostile = correlationFromHeaders(withHeaders({}), {
+      get sampled(): never {
+        throw new Error("private-sampled-sentinel");
+      },
+    });
+    expect(hostile.trace_flags).toBe(0);
+  });
+
   it("L7f minted ids differ across calls (no fixed fallback id)", () => {
     const a = correlationFromHeaders(withHeaders({}));
     const b = correlationFromHeaders(withHeaders({}));
@@ -412,6 +431,102 @@ describe("L7 tracestate forwarding (W3C §3.3)", () => {
 });
 
 describe("L7 outbound headers", () => {
+  it("snapshots every outbound field once", () => {
+    const reads = new Map<string, number>();
+    const changing = <Value>(name: string, first: Value, later: Value) => {
+      const count = (reads.get(name) ?? 0) + 1;
+      reads.set(name, count);
+      return count === 1 ? first : later;
+    };
+    const correlation = {
+      get trace_id() {
+        return changing("trace_id", TRACE, "forged-trace");
+      },
+      get span_id() {
+        return changing("span_id", PARENT_SPAN, "forged-span");
+      },
+      get trace_flags() {
+        return changing("trace_flags", 1 as const, 0 as const);
+      },
+      get request_id() {
+        return changing("request_id", RID, "forged-request");
+      },
+      get tracestate() {
+        return changing("tracestate", undefined, "forged=state");
+      },
+    };
+
+    expect(outboundCorrelationHeaders(correlation)).toEqual({
+      [TRACEPARENT_HEADER]: `00-${TRACE}-${PARENT_SPAN}-01`,
+      [CAIL_REQUEST_ID_HEADER]: RID,
+    });
+    expect(Object.fromEntries(reads)).toEqual({
+      trace_id: 1,
+      span_id: 1,
+      trace_flags: 1,
+      request_id: 1,
+      tracestate: 1,
+    });
+  });
+
+  it("rejects coercible outbound identifiers without coercion", () => {
+    for (const field of ["trace_id", "span_id", "request_id"] as const) {
+      let coercions = 0;
+      const coercible = {
+        [Symbol.toPrimitive]() {
+          coercions += 1;
+          return field === "trace_id"
+            ? TRACE
+            : field === "span_id"
+              ? PARENT_SPAN
+              : RID;
+        },
+      };
+      const correlation = {
+        trace_id: TRACE,
+        span_id: PARENT_SPAN,
+        trace_flags: 1,
+        request_id: RID,
+        [field]: coercible,
+      };
+
+      expect(() =>
+        outboundCorrelationHeaders(correlation as never),
+      ).toThrow(TypeError);
+      expect(coercions).toBe(0);
+    }
+  });
+
+  it("contains hostile outbound correlation access and reflection", () => {
+    const sentinel = "private-correlation-sentinel";
+    const hostileValues = [
+      {
+        get trace_id(): never {
+          throw new Error(sentinel);
+        },
+      },
+      new Proxy(
+        {},
+        {
+          getPrototypeOf() {
+            throw new Error(sentinel);
+          },
+        },
+      ),
+    ];
+
+    for (const correlation of hostileValues) {
+      let thrown: unknown;
+      try {
+        outboundCorrelationHeaders(correlation as never);
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(TypeError);
+      expect(String(thrown)).not.toContain(sentinel);
+    }
+  });
+
   it("L7j outbound traceparent forwards the trace with OUR span as parent-id", () => {
     const c: CailCorrelation = {
       trace_id: TRACE,
