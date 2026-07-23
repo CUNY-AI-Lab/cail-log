@@ -239,7 +239,9 @@ export function outboundCorrelationHeaders(
     );
   }
   if (typeof requestId !== "string" || !REQUEST_ID_RE.test(requestId)) {
-    throw new TypeError("cail-log: request_id must be a lowercase UUID v4");
+    throw new TypeError(
+      "cail-log: request_id must be a lowercase UUID v4 or v7",
+    );
   }
   if (traceFlags !== 0 && traceFlags !== 1) {
     throw new TypeError("cail-log: trace_flags must be 0 or 1");

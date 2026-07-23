@@ -378,7 +378,7 @@ export const MODEL_ID_RE =
 export const SUBJECT_VERSION_RE = /^[a-z0-9][a-z0-9_]{0,15}$/;
 export const SUBJECT_RE = /^cail-[a-z0-9][a-z0-9_]{0,15}-[0-9a-f]{32}$/;
 export const REQUEST_ID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[47][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 export const HEX_TRACE_RE = /^[0-9a-f]{32}$/;
 export const HEX_SPAN_RE = /^[0-9a-f]{16}$/;
 export const ROUTE_TEMPLATE_RE =

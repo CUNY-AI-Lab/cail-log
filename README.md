@@ -430,15 +430,16 @@ work. `call_id` identifies one billable child call. `usage_id` identifies one
 immutable source settlement fact, such as sandbox compute, and may correlate
 its idempotent accounting-delivery retries. The canonical settled log event
 additionally means the accounting service acknowledged that fact.
-All four use lowercase UUID v4 values. A trusted boundary must mint action,
-call, and usage IDs;
-tenant-supplied identifiers are diagnostic hints until a collector validates
-their provenance.
+Action, call, and usage IDs use lowercase UUID v4 values. Request IDs accept
+lowercase UUID v4 and UUID v7 values; this library still mints UUID v4 when no
+valid request ID is present. A trusted boundary must mint action, call, and
+usage IDs; tenant-supplied identifiers are diagnostic hints until a collector
+validates their provenance.
 
 `correlationFromHeaders()` accepts `Headers`, a Request-like `{ headers }`, or
 a structural `{ get(name) }` reader. It adopts a valid W3C trace, creates a new
-span for the current hop, and adopts or mints a lowercase UUID v4
-`X-CAIL-Request-Id`.
+span for the current hop, adopts a lowercase UUID v4 or UUID v7
+`X-CAIL-Request-Id`, or mints a UUID v4 when that header is absent or invalid.
 
 ```ts
 const correlation = correlationFromHeaders(request.headers, {
@@ -464,8 +465,8 @@ empty value is not forwarded.
 The W3C baseline is the 2021 Trace Context Recommendation: the helper carries
 the sampled bit, creates a fresh span for each hop, forwards valid
 `tracestate`, and emits version `00`. `X-CAIL-Request-Id` is a separate CAIL
-contract. Only a lowercase UUID v4 in that header is adopted. Other UUID
-versions, uppercase values, malformed values, and the compatibility-only
+contract. Only a lowercase UUID v4 or UUID v7 in that header is adopted. Other
+UUID versions, uppercase values, malformed values, and the compatibility-only
 `X-Request-Id` alias are not adopted; a new UUID v4 is minted instead. Every
 fleet ingress must normalize to `X-CAIL-Request-Id` before relying on
 cross-service request-ID correlation.

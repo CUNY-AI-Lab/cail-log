@@ -299,10 +299,13 @@ function sanitizeRouteTemplate(value: unknown): string | undefined {
   return sanitizePattern(value, ROUTE_TEMPLATE_RE);
 }
 
+const EVENT_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
 const COMMON_FIELD_DEFS: Readonly<Record<string, FieldDefinition>> = Object.freeze({
   request_id: ["cail.request.id", (value) => sanitizePattern(value, REQUEST_ID_RE)],
-  action_id: ["cail.action.id", (value) => sanitizePattern(value, REQUEST_ID_RE)],
-  call_id: ["cail.call.id", (value) => sanitizePattern(value, REQUEST_ID_RE)],
+  action_id: ["cail.action.id", (value) => sanitizePattern(value, EVENT_ID_RE)],
+  call_id: ["cail.call.id", (value) => sanitizePattern(value, EVENT_ID_RE)],
   http_method: ["http.request.method", (value) => sanitizeEnum(value, HTTP_METHODS)],
   route: ["url.template", sanitizeRouteTemplate],
   status: ["http.response.status_code", sanitizeStatus],
@@ -315,7 +318,7 @@ const COMMON_FIELD_DEFS: Readonly<Record<string, FieldDefinition>> = Object.free
 });
 
 const PLATFORM_FIELD_DEFS: Readonly<Record<string, FieldDefinition>> = Object.freeze({
-  usage_id: ["cail.usage.id", (value) => sanitizePattern(value, REQUEST_ID_RE)],
+  usage_id: ["cail.usage.id", (value) => sanitizePattern(value, EVENT_ID_RE)],
   cohort: ["cail.cohort.id", (value) => sanitizePattern(value, SLUG_RE)],
   key_id: ["cail.key.id", (value) => sanitizePattern(value, MACHINE_ID_RE)],
   product_id: ["cail.product.id", (value) => sanitizePattern(value, SLUG_RE)],
