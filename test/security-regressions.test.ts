@@ -25,6 +25,7 @@ import {
   workersStructuredSink,
   type CailLogEvent,
 } from "../src/index.js";
+import { createCailLogger as createDistCailLogger } from "../dist/index.js";
 
 const ACTION_ID = "9f50d4a4-ef70-41b2-b225-0a5cbf2df5e7";
 const SK_LIVE_CANARY = ["sk", "live", "syntheticsecret7f3a"].join("_");
@@ -236,6 +237,49 @@ describe("content-free service catalogs", () => {
       expect(String(thrown)).not.toContain(proxySentinel);
     }
   });
+
+  it.each([
+    ["source", createCailLogger],
+    ["dist", createDistCailLogger],
+  ] as const)(
+    "%s rejects proxy-valued string options without reflection",
+    (_build, createLogger) => {
+      for (const field of ["service", "release", "subjectVersion"] as const) {
+        const sentinel = `private-${field}-prototype-sentinel`;
+        let prototypeReads = 0;
+        const hostileValue = new Proxy(
+          {},
+          {
+            getPrototypeOf() {
+              prototypeReads += 1;
+              throw new Error(sentinel);
+            },
+          },
+        );
+        const options = {
+          service: "fixture-service",
+          release: "fixture",
+          env: "test",
+          sourceClass: "platform",
+          subjectVersion: "v1",
+          catalog: CAIL_EVENT_CATALOG,
+          sink: () => {},
+          [field]: hostileValue,
+        };
+
+        let thrown: unknown;
+        try {
+          createLogger(options as never);
+        } catch (error) {
+          thrown = error;
+        }
+
+        expect(thrown).toBeInstanceOf(TypeError);
+        expect(prototypeReads).toBe(0);
+        expect(String(thrown)).not.toContain(sentinel);
+      }
+    },
+  );
 
   it("assigns one library-owned body to service-defined events", () => {
     const catalog = defineEventCatalog({

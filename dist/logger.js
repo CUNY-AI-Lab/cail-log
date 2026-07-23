@@ -37,7 +37,7 @@ function snapshotLoggerOptions(options) {
     }
 }
 function sanitizePattern(value, pattern) {
-    if (isSensitive(value) || typeof value !== "string")
+    if (typeof value !== "string" || isSensitive(value))
         return undefined;
     if (isSecretShaped(value))
         return undefined;

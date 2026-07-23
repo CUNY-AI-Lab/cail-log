@@ -257,7 +257,7 @@ function snapshotLoggerOptions(options: unknown): CailLoggerOptionsSnapshot {
 }
 
 function sanitizePattern(value: unknown, pattern: RegExp): string | undefined {
-  if (isSensitive(value) || typeof value !== "string") return undefined;
+  if (typeof value !== "string" || isSensitive(value)) return undefined;
   if (isSecretShaped(value)) return undefined;
   return pattern.test(value) ? value : undefined;
 }
