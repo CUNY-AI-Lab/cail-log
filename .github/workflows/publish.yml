@@ -29,6 +29,22 @@ jobs:
         run: |
           PACKAGE_VERSION="$(bun -p "require('./package.json').version")"
           test "v${PACKAGE_VERSION}" = "${GITHUB_REF_NAME}"
-      - run: bun publish
+      # actions/setup-node writes its .npmrc to a temp path and points
+      # NPM_CONFIG_USERCONFIG at it. bun does not read that variable, so it
+      # reached the registry unauthenticated and exited 1 straight after packing
+      # without printing a reason — the pack output made an auth failure look
+      # like a publish failure.
+      #
+      # Written into $HOME rather than the working tree, so the token cannot be
+      # swept into a pack regardless of what `files` lists. Kept in the same step
+      # as the publish, and with one env block, so exactly one step in this
+      # workflow ever sees the token; test/security-regressions.test.ts asserts
+      # that by requiring a single NODE_AUTH_TOKEN occurrence.
+      - name: Publish to GitHub Packages
+        run: |
+          printf '@cuny-ai-lab:registry=https://npm.pkg.github.com\n' > "$HOME/.npmrc"
+          printf '//npm.pkg.github.com/:_authToken=%s\n' "$NODE_AUTH_TOKEN" >> "$HOME/.npmrc"
+          chmod 600 "$HOME/.npmrc"
+          bun publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
