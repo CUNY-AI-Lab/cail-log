@@ -42,9 +42,15 @@ jobs:
       # that by requiring a single NODE_AUTH_TOKEN occurrence.
       - name: Publish to GitHub Packages
         run: |
-          printf '@cuny-ai-lab:registry=https://npm.pkg.github.com\n' > "$HOME/.npmrc"
-          printf '//npm.pkg.github.com/:_authToken=%s\n' "$NODE_AUTH_TOKEN" >> "$HOME/.npmrc"
-          chmod 600 "$HOME/.npmrc"
+          # setup-node points NPM_CONFIG_USERCONFIG at an .npmrc containing a
+          # literal ${NODE_AUTH_TOKEN}, relying on npm to expand it. bun reads
+          # that file but does not expand the variable, so it reached the
+          # registry unauthenticated and exited 1 right after packing.
+          unset NPM_CONFIG_USERCONFIG
+          printf '@cuny-ai-lab:registry=https://npm.pkg.github.com\n' > .npmrc
+          printf '//npm.pkg.github.com/:_authToken=%s\n' "$NODE_AUTH_TOKEN" >> .npmrc
+          chmod 600 .npmrc
           bun publish
+          rm -f .npmrc
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
