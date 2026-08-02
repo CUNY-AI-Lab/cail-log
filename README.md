@@ -538,7 +538,7 @@ portable schema 2 in its `log_schema_version` column.
 
 ```bash
 bun install
-bun test
+bun run test
 bun run typecheck
 bun run build
 bun run check:dist
