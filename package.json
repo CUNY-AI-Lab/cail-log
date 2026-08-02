@@ -32,12 +32,13 @@
     "test:watch": "vitest",
     "prepublishOnly": "bun run verify",
     "prepare": "bun run build",
-    "verify": "bun run check:dist && bun test && bun run typecheck && bun pm pack --dry-run --ignore-scripts"
+    "verify": "bun run check:dist && bun run test && bun run typecheck && bun pm pack --dry-run --ignore-scripts"
   },
   "devDependencies": {
     "@types/node": "^20.17.6",
+    "postcss": "8.5.25",
     "typescript": "^5.6.3",
-    "vitest": "^2.1.8"
+    "vitest": "4.1.10"
   },
   "repository": {
     "type": "git",
