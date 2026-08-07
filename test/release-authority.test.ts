@@ -236,6 +236,9 @@ describe("release authority", () => {
 
   it("keeps the future preflight separate from historical authority", () => {
     expect(packageJson.version).toBe("0.6.1");
+    expect(packageJson.scripts.check).toBe(
+      "bun run verify && bun run check:release-authority",
+    );
     expect(packageJson.scripts["check:release-authority"]).toBe(
       "bun scripts/check-release-authority.ts",
     );
