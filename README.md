@@ -315,7 +315,7 @@ HTTP methods use the OpenTelemetry known-method vocabulary, including `QUERY`,
 plus `_OTHER`. The `route` grammar accepts bounded path templates such as
 `/users/{user_id}` and rejects URLs, queries, and control characters. Syntax
 cannot distinguish a safe static router template from an identifier-bearing
-raw path such as `/users/stephen.zweibel`; the trusted producer must pass the
+raw path such as `/users/example-user`; the trusted producer must pass the
 router template and keep a raw-path canary in its tests. In portable schema 2,
 `route` emits as `url.template` for compatibility. OpenTelemetry 1.43 uses
 `http.route` for inbound server routes, so correcting that name requires a
