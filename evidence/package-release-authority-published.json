@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "package": {
+    "name": "@cuny-ai-lab/cail-log",
+    "version": "0.6.0"
+  },
+  "behavior_authority": {
+    "commit": "cb6ffc0cfd4cb544639cbf288ff6eb24c7027e98",
+    "tree": "618c4bdfae0effadbe23cfd6c4dfb1fcf6440697",
+    "runtime_paths": [
+      "contract",
+      "src"
+    ],
+    "runtime_sha256": "ebae96498da12b10b402bbb9754bbf58fbb2d675761282c0fadfba21f7b0632b"
+  },
+  "release": {
+    "tag": "v0.6.0",
+    "commit": "7d093f4c4d28367056c5124889a283d5ff9908c4",
+    "tree": "b0150aa34f31de914a9a32493c5abf3bb4d5ad43",
+    "release_id": 359804957,
+    "release_url": "https://github.com/CUNY-AI-Lab/cail-log/releases/tag/v0.6.0",
+    "published_at": "2026-07-25T16:40:26Z",
+    "workflow_run_id": 30166097999,
+    "workflow_run_url": "https://github.com/CUNY-AI-Lab/cail-log/actions/runs/30166097999",
+    "workflow_job_id": 89699267926,
+    "workflow_job_url": "https://github.com/CUNY-AI-Lab/cail-log/actions/runs/30166097999/job/89699267926",
+    "run_status": "completed",
+    "run_conclusion": "success"
+  },
+  "registry": {
+    "url": "https://npm.pkg.github.com",
+    "api": "https://api.github.com/orgs/CUNY-AI-Lab/packages/npm/cail-log/versions",
+    "package_id": 13479479,
+    "package_version_id": 1066236862,
+    "version": "0.6.0",
+    "state": "published",
+    "created_at": "2026-07-25T16:40:58Z",
+    "observed_at": "2026-08-07T01:05:01Z",
+    "tarball": "https://npm.pkg.github.com/download/@cuny-ai-lab/cail-log/0.6.0/632c8a3d74bc4709c23b9636b73471c1291d7679",
+    "artifact_sha1": "632c8a3d74bc4709c23b9636b73471c1291d7679",
+    "integrity": "sha512-Hlj1K7TXL2XOI6nOkh5SKRafCldr87Zp+aHm73MqiV0hajAPMiqp7QuBlndzok7Vy0fIX7C6msi093s/a9Yesw==",
+    "artifact_bytes": 50269,
+    "artifact_sha256": "8689422456eb4b7c672538ba91efb7606e9287df473a99a91ee2a60b5f9ba215",
+    "artifact_git_tree_sha256": "92564c897d172b0f9742bfa852f3ba55a147dc5339fdef862650d9b084a415e6"
+  }
+}

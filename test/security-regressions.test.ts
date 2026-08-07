@@ -583,7 +583,9 @@ createCailLogger({
       scripts: Record<string, string>;
     };
     expect(packageJson.scripts["verify"]).toContain("check:dist");
-    expect(packageJson.scripts["prepublishOnly"]).toBe("bun run verify");
+    expect(packageJson.scripts["prepublishOnly"]).toBe(
+      "bun run verify && bun run check:release-live",
+    );
     expect(packageJson.version).toBe("0.6.0");
     expect(existsSync(".github/workflows/ci.yml")).toBe(true);
     const ciWorkflow = readFileSync(".github/workflows/ci.yml", "utf8");
@@ -604,15 +606,18 @@ createCailLogger({
     expect(publishWorkflow).toContain("bun run verify");
     expect(publishWorkflow).toContain("--ignore-scripts");
     expect(publishWorkflow).toContain("persist-credentials: false");
-    expect(publishWorkflow).toContain('PACKAGE_VERSION="$(bun -p');
-    expect(publishWorkflow).toContain(
-      ['test "v$', '{PACKAGE_VERSION}" = "$', '{GITHUB_REF_NAME}"'].join(""),
-    );
+    expect(publishWorkflow).toContain("bun run check:release-ref");
+    expect(publishWorkflow).toContain("GITHUB_SHA: ${{ github.sha }}");
+    expect(publishWorkflow).toContain("gh api --paginate");
+    expect(publishWorkflow).toContain("bun run check:release-live");
     expect(publishWorkflow).toContain("bun publish");
     expect(publishWorkflow).not.toContain("npm publish");
     expect(publishWorkflow).not.toContain("node -p");
-    expect(publishWorkflow).toContain("NODE_AUTH_TOKEN:");
-    expect(publishWorkflow.match(/NODE_AUTH_TOKEN:/g)).toHaveLength(1);
+    expect(publishWorkflow).toContain("NPM_CONFIG_TOKEN:");
+    expect(publishWorkflow.match(/NPM_CONFIG_TOKEN:/g)).toHaveLength(1);
+    expect(publishWorkflow).not.toContain("NODE_AUTH_TOKEN");
+    expect(publishWorkflow).not.toContain("NPM_CONFIG_USERCONFIG");
+    expect(publishWorkflow).not.toContain("> .npmrc");
 
     for (const workflow of [ciWorkflow, publishWorkflow]) {
       expect(workflow).toContain(
