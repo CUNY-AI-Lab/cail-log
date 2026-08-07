@@ -22,6 +22,8 @@ jobs:
         with:
           node-version: 20
       - run: bun install --frozen-lockfile --ignore-scripts
+      - name: Audit dependencies
+        run: bun audit --audit-level high
       - run: bun run verify
       - name: Smoke test the built package on the declared Node baseline
         run: node --input-type=module -e "const cailLog = await import('./dist/index.js'); if (cailLog.CAIL_LOG_SCHEMA_VERSION !== 2) process.exit(1)"

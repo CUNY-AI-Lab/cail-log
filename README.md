@@ -69,10 +69,21 @@ Pin the reviewed release exactly — while the package remains below `1.0.0`,
 for example `"@cuny-ai-lab/cail-log": "0.6.0"` — then run `bun install` with
 `NODE_AUTH_TOKEN` set in the environment to a GitHub PAT that has
 `read:packages` (supplied by a user-level `~/.npmrc` or a CI secret).
+Version `0.6.0` is the independently verified published artifact. Its release
+tag, source commit, successful publish workflow, GitHub Packages version, and
+downloaded tarball bytes are recorded in
+[`evidence/package-release-authority-published.json`](evidence/package-release-authority-published.json).
+That record is historical evidence, not permission to republish the occupied
+version. A future release must use a new package version; its preflight queries
+all active registry pages immediately before publishing and fails closed if the
+target version is present or the response is incomplete.
+
 Maintainers publish by creating a GitHub release whose `vX.Y.Z` tag exactly
-matches `package.json`. The release workflow reruns verification and publishes
-with GitHub's scoped package token. The published package ships `dist`, so
-consumers do not need a build step.
+matches `package.json`. The workflow resolves lightweight or annotated tags,
+requires the tag commit to equal `GITHUB_SHA` and the live default-branch head,
+reruns verification and a high-severity audit, then publishes with Bun's
+documented `NPM_CONFIG_TOKEN` registry configuration. The published package
+ships `dist`, so consumers do not need a build step.
 
 ## Create a logger
 
@@ -553,9 +564,10 @@ runtime field.
 `check:dist` compiles into an isolated temporary directory and byte-compares
 that output with committed `dist`, normalizing only source-map paths. `verify`
 runs that parity check, tests, type-checks, and package-content inspection. The
-committed CI workflow installs with the frozen Bun lockfile and runs `verify`
-on pull requests and pushes to `main`. Publishing occurs only from a GitHub
-release after the workflow verifies the release tag, package version, tests,
+committed CI workflow installs with the frozen Bun lockfile, audits at high
+severity, and runs `verify` on pull requests and pushes to `main`. Publishing
+occurs only from a GitHub release after the workflow verifies the release tag,
+package version, live default-branch head, unoccupied registry version, tests,
 types, committed `dist`, and package contents.
 
 [DESIGN.md](DESIGN.md) is the canonical architecture, security, operations,

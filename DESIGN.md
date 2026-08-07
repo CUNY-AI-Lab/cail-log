@@ -252,11 +252,17 @@ durable production data is changed by this repository's build or test suite.
 
 `bun run verify` performs an isolated source build and compares it with
 committed `dist`, runs all tests, type-checks source and tests, and inspects the
-package contents. CI installs from the frozen Bun lockfile and runs the same
-command on pull requests and pushes to `main`. The parity test also injects a
-stale generated file and proves the check fails. GitHub Packages publishing is
-restricted to a published GitHub release, reruns `verify`, and fails unless the
-release tag exactly matches `v<package version>`.
+package contents. CI installs from the frozen Bun lockfile, runs a high-severity
+dependency audit, and runs the same verification on pull requests and pushes to
+`main`. The parity test also injects a stale generated file and proves the check
+fails. The published 0.6.0 source, workflow, registry version, and artifact
+bytes are recorded as historical authority in
+`evidence/package-release-authority-published.json`; that record does not
+authorize a future publish. GitHub Packages publishing is restricted to a
+published GitHub release, resolves lightweight or annotated tags, requires the
+tag commit to equal `GITHUB_SHA` and the live default-branch head, and fails
+closed if the target registry version is occupied or the paginated response is
+incomplete.
 
 Runtime rollback is a producer and collector deployment operation. Logging is
 non-authoritative, so loss of a diagnostic sink does not roll back application
