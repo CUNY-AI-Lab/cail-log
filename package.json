@@ -36,6 +36,7 @@
     "test:watch": "vitest",
     "prepublishOnly": "bun run verify && bun run check:release-live",
     "prepare": "bun run build",
+    "check": "bun run verify && bun run check:release-authority",
     "verify": "bun run check:dist && bun run test && bun run typecheck && bun pm pack --dry-run --ignore-scripts"
   },
   "devDependencies": {
