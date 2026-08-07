@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   isValidArtifactIdentity,
+  isValidCurrentPublishedAuthority,
   isValidLiveVersions,
   isValidPublishedAuthority,
   isValidPublishedRegistryVersion,
@@ -18,6 +19,12 @@ const root = resolve(import.meta.dirname, "..");
 const authority = JSON.parse(
   readFileSync(
     resolve(root, "evidence/package-release-authority-published.json"),
+    "utf8",
+  ),
+);
+const currentAuthority = JSON.parse(
+  readFileSync(
+    resolve(root, "evidence/package-release-authority-published-0.6.1.json"),
     "utf8",
   ),
 );
@@ -105,6 +112,34 @@ describe("release authority", () => {
     ).toBe(true);
   });
 
+  it("records the exact 0.6.1 source, workflow, registry, and artifact join", () => {
+    expect(isValidCurrentPublishedAuthority(currentAuthority)).toBe(true);
+    expect(currentAuthority.package.version).toBe("0.6.1");
+    expect(currentAuthority.behavior_authority).toEqual(
+      authority.behavior_authority,
+    );
+    expect(currentAuthority.release).toMatchObject({
+      tag: "v0.6.1",
+      commit: "038269d1d27d857ab537d07928fd604482144219",
+      tree: "ba45e27921e3eed709a85d667793341823131ca2",
+      workflow_run_id: 31176048181,
+      workflow_job_id: 92858162874,
+      run_status: "completed",
+      run_conclusion: "success",
+    });
+    expect(currentAuthority.registry).toMatchObject({
+      package_version_id: 1108499365,
+      version: "0.6.1",
+      state: "published",
+      artifact_sha1: "1b33369223ff745e8647931041a031ea99993680",
+      artifact_bytes: 50662,
+      artifact_sha256:
+        "8576448c206808b9974b82c4548cade0cb826e620a6aced1497059fde7bfc0b9",
+      artifact_git_tree_sha256:
+        "fdd0da5ec61556ce550aaf7cbda334aa3b746f0283cc658053773be41ce41202",
+    });
+  });
+
   it("fails closed for forged or extended authority records", () => {
     expect(
       isValidPublishedAuthority({
@@ -125,6 +160,18 @@ describe("release authority", () => {
       }),
     ).toBe(false);
     expect(() => isValidPublishedAuthority(null)).not.toThrow();
+    expect(
+      isValidCurrentPublishedAuthority({
+        ...currentAuthority,
+        registry: { ...currentAuthority.registry, artifact_sha256: "forged" },
+      }),
+    ).toBe(false);
+    expect(
+      isValidCurrentPublishedAuthority({
+        ...currentAuthority,
+        release: { ...currentAuthority.release, extra: true },
+      }),
+    ).toBe(false);
   });
 
   it("rejects occupied, malformed, empty, and incomplete live snapshots", () => {
