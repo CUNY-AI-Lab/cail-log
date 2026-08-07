@@ -8,9 +8,14 @@ const publishedAuthorityPath = resolve(
   root,
   "evidence/package-release-authority-published.json",
 );
+const currentPublishedAuthorityPath = resolve(
+  root,
+  "evidence/package-release-authority-published-0.6.1.json",
+);
 
 const packageName = "@cuny-ai-lab/cail-log";
 const publishedVersion = "0.6.0";
+const currentVersion = "0.6.1";
 const publishedRuntimeSha256 =
   "ebae96498da12b10b402bbb9754bbf58fbb2d675761282c0fadfba21f7b0632b";
 const publishedSource = {
@@ -34,6 +39,28 @@ const publishedArtifact = {
     "8689422456eb4b7c672538ba91efb7606e9287df473a99a91ee2a60b5f9ba215",
   artifact_git_tree_sha256:
     "92564c897d172b0f9742bfa852f3ba55a147dc5339fdef862650d9b084a415e6",
+} as const;
+const currentSource = {
+  tag: "v0.6.1",
+  commit: "038269d1d27d857ab537d07928fd604482144219",
+  tree: "ba45e27921e3eed709a85d667793341823131ca2",
+} as const;
+const currentRegistryVersion = {
+  id: 1108499365,
+  name: currentVersion,
+  created_at: "2026-08-07T11:56:09Z",
+} as const;
+const currentArtifact = {
+  tarball:
+    "https://npm.pkg.github.com/download/@cuny-ai-lab/cail-log/0.6.1/1b33369223ff745e8647931041a031ea99993680",
+  artifact_sha1: "1b33369223ff745e8647931041a031ea99993680",
+  integrity:
+    "sha512-2GkC0DRkXndWW5HVBasUbif1/9F4e3ram4Fkmg1eGi39/WLqgho9e9aROg0ZM89Q2Si3bgUVtv/LAjwuUCp1cw==",
+  artifact_bytes: 50662,
+  artifact_sha256:
+    "8576448c206808b9974b82c4548cade0cb826e620a6aced1497059fde7bfc0b9",
+  artifact_git_tree_sha256:
+    "fdd0da5ec61556ce550aaf7cbda334aa3b746f0283cc658053773be41ce41202",
 } as const;
 
 type UnknownRecord = Record<string, unknown>;
@@ -228,6 +255,102 @@ export function isValidPublishedAuthority(value: unknown): boolean {
   return true;
 }
 
+export function isValidCurrentPublishedAuthority(value: unknown): boolean {
+  if (
+    !hasExactKeys(value, [
+      "schema_version",
+      "package",
+      "behavior_authority",
+      "release",
+      "registry",
+    ]) ||
+    value.schema_version !== 1 ||
+    !hasExactKeys(value.package, ["name", "version"]) ||
+    value.package.name !== packageName ||
+    value.package.version !== currentVersion ||
+    !hasExactKeys(value.behavior_authority, [
+      "commit",
+      "tree",
+      "runtime_paths",
+      "runtime_sha256",
+    ]) ||
+    !validSha(value.behavior_authority.commit) ||
+    value.behavior_authority.commit !==
+      "cb6ffc0cfd4cb544639cbf288ff6eb24c7027e98" ||
+    !validSha(value.behavior_authority.tree) ||
+    value.behavior_authority.tree !==
+      "618c4bdfae0effadbe23cfd6c4dfb1fcf6440697" ||
+    !runtimePaths(value.behavior_authority.runtime_paths) ||
+    value.behavior_authority.runtime_sha256 !== publishedRuntimeSha256 ||
+    !hasExactKeys(value.release, [
+      "tag",
+      "commit",
+      "tree",
+      "release_id",
+      "release_url",
+      "published_at",
+      "workflow_run_id",
+      "workflow_run_url",
+      "workflow_job_id",
+      "workflow_job_url",
+      "run_status",
+      "run_conclusion",
+    ]) ||
+    value.release.tag !== currentSource.tag ||
+    value.release.commit !== currentSource.commit ||
+    value.release.tree !== currentSource.tree ||
+    value.release.release_id !== 366717356 ||
+    value.release.release_url !==
+      "https://github.com/CUNY-AI-Lab/cail-log/releases/tag/v0.6.1" ||
+    value.release.published_at !== "2026-08-07T11:55:33Z" ||
+    value.release.workflow_run_id !== 31176048181 ||
+    value.release.workflow_run_url !==
+      "https://github.com/CUNY-AI-Lab/cail-log/actions/runs/31176048181" ||
+    value.release.workflow_job_id !== 92858162874 ||
+    value.release.workflow_job_url !==
+      "https://github.com/CUNY-AI-Lab/cail-log/actions/runs/31176048181/job/92858162874" ||
+    value.release.run_status !== "completed" ||
+    value.release.run_conclusion !== "success" ||
+    !hasExactKeys(value.registry, [
+      "url",
+      "api",
+      "package_id",
+      "package_version_id",
+      "version",
+      "state",
+      "created_at",
+      "observed_at",
+      "tarball",
+      "artifact_sha1",
+      "integrity",
+      "artifact_bytes",
+      "artifact_sha256",
+      "artifact_git_tree_sha256",
+    ]) ||
+    value.registry.url !== "https://npm.pkg.github.com" ||
+    value.registry.api !==
+      "https://api.github.com/orgs/CUNY-AI-Lab/packages/npm/cail-log/versions" ||
+    value.registry.package_id !== 13479479 ||
+    value.registry.package_version_id !== currentRegistryVersion.id ||
+    value.registry.version !== currentRegistryVersion.name ||
+    value.registry.created_at !== currentRegistryVersion.created_at ||
+    value.registry.state !== "published" ||
+    typeof value.registry.observed_at !== "string" ||
+    typeof value.registry.tarball !== "string" ||
+    value.registry.tarball !== currentArtifact.tarball ||
+    value.registry.artifact_sha1 !== currentArtifact.artifact_sha1 ||
+    value.registry.tarball.split("/").at(-1) !== value.registry.artifact_sha1 ||
+    value.registry.integrity !== currentArtifact.integrity ||
+    value.registry.artifact_bytes !== currentArtifact.artifact_bytes ||
+    value.registry.artifact_sha256 !== currentArtifact.artifact_sha256 ||
+    value.registry.artifact_git_tree_sha256 !==
+      currentArtifact.artifact_git_tree_sha256
+  ) {
+    return false;
+  }
+  return true;
+}
+
 function validRegistryVersion(value: unknown): value is RegistryVersion {
   return (
     hasFields(value, ["id", "name", "created_at"]) &&
@@ -288,12 +411,17 @@ function main(): void {
   const publishedAuthority = JSON.parse(
     readFileSync(publishedAuthorityPath, "utf8"),
   ) as unknown;
+  const currentPublishedAuthority = JSON.parse(
+    readFileSync(currentPublishedAuthorityPath, "utf8"),
+  ) as unknown;
   const packageJson = JSON.parse(
     readFileSync(resolve(root, "package.json"), "utf8"),
-  ) as { name?: unknown };
+  ) as { name?: unknown; version?: unknown };
   if (
     !isValidPublishedAuthority(publishedAuthority) ||
-    packageJson.name !== packageName
+    !isValidCurrentPublishedAuthority(currentPublishedAuthority) ||
+    packageJson.name !== packageName ||
+    packageJson.version !== currentVersion
   ) {
     throw new Error("cail-log: local published release authority is invalid");
   }
