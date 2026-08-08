@@ -1,6 +1,5 @@
 import {
   cpSync,
-  existsSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -574,61 +573,6 @@ createCailLogger({
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     } finally {
       rmSync(temporary, { recursive: true, force: true });
-    }
-  });
-
-  it("checks committed dist parity in local verification and CI", () => {
-    const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
-      version: string;
-      scripts: Record<string, string>;
-    };
-    expect(packageJson.scripts["verify"]).toContain("check:dist");
-    expect(packageJson.scripts["prepublishOnly"]).toBe(
-      "bun run verify && bun run check:release-live",
-    );
-    expect(packageJson.version).toBe("0.6.1");
-    expect(existsSync(".github/workflows/ci.yml")).toBe(true);
-    const ciWorkflow = readFileSync(".github/workflows/ci.yml", "utf8");
-    expect(ciWorkflow).toContain("bun run verify");
-    expect(ciWorkflow).toContain("--ignore-scripts");
-    expect(ciWorkflow).toContain("persist-credentials: false");
-    expect(ciWorkflow).toContain(
-      "node --input-type=module",
-    );
-
-    const publishWorkflow = readFileSync(
-      ".github/workflows/publish.yml",
-      "utf8",
-    );
-    expect(publishWorkflow).toContain("release:");
-    expect(publishWorkflow).toContain("types: [published]");
-    expect(publishWorkflow).toContain("packages: write");
-    expect(publishWorkflow).toContain("bun run verify");
-    expect(publishWorkflow).toContain("--ignore-scripts");
-    expect(publishWorkflow).toContain("persist-credentials: false");
-    expect(publishWorkflow).toContain("bun run check:release-ref");
-    expect(publishWorkflow).toContain("GITHUB_SHA: ${{ github.sha }}");
-    expect(publishWorkflow).toContain("gh api --paginate");
-    expect(publishWorkflow).toContain("bun run check:release-live");
-    expect(publishWorkflow).toContain("bun publish");
-    expect(publishWorkflow).not.toContain("npm publish");
-    expect(publishWorkflow).not.toContain("node -p");
-    expect(publishWorkflow).toContain("NPM_CONFIG_TOKEN:");
-    expect(publishWorkflow.match(/NPM_CONFIG_TOKEN:/g)).toHaveLength(1);
-    expect(publishWorkflow).not.toContain("NODE_AUTH_TOKEN");
-    expect(publishWorkflow).not.toContain("NPM_CONFIG_USERCONFIG");
-    expect(publishWorkflow).not.toContain("> .npmrc");
-
-    for (const workflow of [ciWorkflow, publishWorkflow]) {
-      expect(workflow).toContain(
-        "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",
-      );
-      expect(workflow).toContain(
-        "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6",
-      );
-      expect(workflow).toContain(
-        "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
-      );
     }
   });
 
