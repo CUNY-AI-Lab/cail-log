@@ -20,7 +20,7 @@ decisions, delivery guarantees, or release provenance.
 - Secret-shaped values and the internal `Sensitive` wrapper are rejected before
   a sink receives an event. Diagnostics contain codes only.
 
-## Removed contract surface
+## Deferred cuts
 
 The shared schema retains quota snapshots, credential `key_id`, upstream and
 response-byte observations, the JSON-line sink, the `Sensitive` wrapper, and
