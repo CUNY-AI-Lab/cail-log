@@ -5,7 +5,6 @@ import { assertValidatedEvent } from "./event-provenance.js";
 export const CAIL_ANALYTICS_ENGINE_DATASET = "cail_fleet_events_v1" as const;
 export const CAIL_ANALYTICS_ENGINE_SCHEMA_VERSION = 1 as const;
 export const CAIL_ANALYTICS_ENGINE_MISSING_NUMBER = -1 as const;
-export const CAIL_ANALYTICS_ENGINE_MAX_POINTS_PER_INVOCATION = 250 as const;
 
 /**
  * Analytics Engine exposes ordered blob/double columns. These one-based
@@ -36,12 +35,12 @@ export const CAIL_ANALYTICS_ENGINE_DOUBLES = Object.freeze({
   severity_number: 3,
   status_code: 4,
   duration_ms: 5,
-  upstream_ms: 6,
+  reserved_6: 6,
   input_tokens: 7,
   output_tokens: 8,
   cost_micro_usd: 9,
   request_bytes: 10,
-  response_bytes: 11,
+  reserved_11: 11,
   retry_count: 12,
   event_timestamp_ms: 13,
 } as const);
@@ -116,12 +115,12 @@ export function toAnalyticsEngineDataPoint(
       event.severity_number,
       numberAttribute(attributes, "http.response.status_code"),
       numberAttribute(attributes, "cail.operation.duration_ms"),
-      numberAttribute(attributes, "cail.upstream.duration_ms"),
+      CAIL_ANALYTICS_ENGINE_MISSING_NUMBER,
       numberAttribute(attributes, "gen_ai.usage.input_tokens"),
       numberAttribute(attributes, "gen_ai.usage.output_tokens"),
       numberAttribute(attributes, "cail.gen_ai.cost.micro_usd"),
       numberAttribute(attributes, "http.request.body.size"),
-      numberAttribute(attributes, "http.response.body.size"),
+      CAIL_ANALYTICS_ENGINE_MISSING_NUMBER,
       numberAttribute(attributes, "cail.retry.count"),
       Number.isFinite(eventTimestamp)
         ? eventTimestamp

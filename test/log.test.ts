@@ -7,7 +7,6 @@ import {
   createCailLogger,
   defineEventCatalog,
   isSensitive,
-  jsonLineSink,
   sensitive,
   workersStructuredSink,
   type CailLogEvent,
@@ -154,22 +153,6 @@ describe("strict field behavior", () => {
 });
 
 describe("explicit sinks and derived severity", () => {
-  it("writes a JSON line only when jsonLineSink is selected", () => {
-    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const logger = createCailLogger({
-      service: "workbench", release: "local", env: "test",
-      sourceClass: "platform", subjectVersion: "v1",
-      catalog: CAIL_EVENT_CATALOG,
-      sink: jsonLineSink,
-    });
-    logger.emit(CAIL_EVENTS.ACTION_ADMITTED, actionFields());
-    const line = consoleSpy.mock.calls[0]![0];
-    expect(typeof line).toBe("string");
-    expect(JSON.parse(line as string)).toMatchObject({
-      event_name: CAIL_EVENTS.ACTION_ADMITTED,
-    });
-  });
-
   it("routes outcome-derived Workers events by severity", () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});

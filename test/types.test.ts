@@ -10,7 +10,7 @@ import {
 const ACTION_ID = "9f50d4a4-ef70-41b2-b225-0a5cbf2df5e7";
 
 describe("type-level event contract", () => {
-  it("requires event-specific fields and source-compatible events", () => {
+  it("requires event-specific fields and source-scoped events", () => {
     const events: CailLogEvent[] = [];
     const platform = createCailLogger({
       service: "gateway", release: "local", env: "test",
@@ -106,20 +106,6 @@ describe("type-level event contract", () => {
         terminal: { outcome: "ok", reason: "timeout" },
         duration_ms: 1,
       });
-      platform.emit(CAIL_EVENTS.QUOTA_CHARGED, {
-        product_id: "kale-workbench",
-        principal: { type: "anonymous" },
-        // @ts-expect-error the canonical quota event permits only ok/completed
-        terminal: { outcome: "timeout", reason: "timeout" },
-        quota: {
-          kind: "request_count",
-          unit: "requests",
-          state: "fresh",
-          limit: 10,
-          used: 1,
-          reset_at: "2026-08-01T00:00:00.000Z",
-        },
-      });
       // @ts-expect-error successful terminal facts cannot carry an error type
       platform.emit(CAIL_EVENTS.ACTION_TERMINAL, {
         action_id: ACTION_ID,
@@ -135,23 +121,6 @@ describe("type-level event contract", () => {
         principal: { type: "anonymous" },
         // @ts-expect-error trace context is atomic
         trace: { trace_id: "0af7651916cd43dd8448eb211c80319c" },
-      });
-      // @ts-expect-error a key identifier cannot be anonymous
-      platform.emit(CAIL_EVENTS.REQUEST_RECEIVED, {
-        request_id: "0af7651b-16f9-4a3b-8f42-00f067aa0ba9",
-        product_id: "kale-workbench",
-        http_method: "POST",
-        route: "/v1/actions",
-        principal: { type: "anonymous" },
-        key_id: "kid-1",
-      });
-      // @ts-expect-error a key identifier requires a principal
-      platform.emit(CAIL_EVENTS.REQUEST_RECEIVED, {
-        request_id: "0af7651b-16f9-4a3b-8f42-00f067aa0ba9",
-        product_id: "kale-workbench",
-        http_method: "POST",
-        route: "/v1/actions",
-        key_id: "kid-1",
       });
       // @ts-expect-error sink selection is required
       createCailLogger({

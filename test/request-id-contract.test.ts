@@ -6,13 +6,6 @@ import {
   createCailLogger as createSourceLogger,
   outboundCorrelationHeaders as sourceOutboundCorrelationHeaders,
 } from "../src/index.js";
-import {
-  CAIL_EVENT_CATALOG as DIST_CATALOG,
-  CAIL_EVENTS as DIST_EVENTS,
-  correlationFromHeaders as distCorrelationFromHeaders,
-  createCailLogger as createDistLogger,
-  outboundCorrelationHeaders as distOutboundCorrelationHeaders,
-} from "../dist/index.js";
 
 const UUID_V4 = "11111111-1111-4111-8111-111111111111";
 const UUID_V7 = "019f8bdc-342a-76e1-ba71-005d69808f86";
@@ -29,14 +22,6 @@ const builds = [
     correlationFromHeaders: sourceCorrelationFromHeaders,
     createLogger: createSourceLogger,
     outboundCorrelationHeaders: sourceOutboundCorrelationHeaders,
-  },
-  {
-    name: "dist",
-    catalog: DIST_CATALOG,
-    events: DIST_EVENTS,
-    correlationFromHeaders: distCorrelationFromHeaders,
-    createLogger: createDistLogger,
-    outboundCorrelationHeaders: distOutboundCorrelationHeaders,
   },
 ] as const;
 

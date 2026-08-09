@@ -3,7 +3,6 @@ import {
   CAIL_ANALYTICS_ENGINE_BLOBS,
   CAIL_ANALYTICS_ENGINE_DOUBLES,
   CAIL_ANALYTICS_ENGINE_MISSING_NUMBER,
-  CAIL_ANALYTICS_ENGINE_MAX_POINTS_PER_INVOCATION,
   CAIL_EVENT_CATALOG,
   CAIL_EVENTS,
   CAIL_PLATFORM_FIELD_NAMES,
@@ -182,8 +181,6 @@ describe("Analytics Engine projection", () => {
     expect(point.blobs).toHaveLength(20);
     expect(point.doubles).toHaveLength(20);
     expect(new TextEncoder().encode(point.blobs.join("")).byteLength).toBeLessThanOrEqual(16 * 1024);
-    expect(CAIL_ANALYTICS_ENGINE_MAX_POINTS_PER_INVOCATION).toBe(250);
-
     const tenantCatalog = defineEventCatalog({
       "test.service_only": {
         source: "tenant",

@@ -196,7 +196,7 @@ describe("L7 mint only when genuinely absent", () => {
     }
   });
 
-  it("L7f2 does not adopt the response-only x-request-id compatibility alias", () => {
+  it("L7f2 does not adopt the response-only x-request-id alias", () => {
     const c = correlationFromHeaders(withHeaders({ "x-request-id": RID }));
     expect(c.request_id).not.toBe(RID);
     expect(c.request_id).toMatch(UUID);

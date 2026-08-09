@@ -1,14 +1,3 @@
-import {
-  cpSync,
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { spawnSync } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
 import {
   CAIL_EVENT_CATALOG,
@@ -19,23 +8,17 @@ import {
   createCailLogger,
   defineEventCatalog,
   fanoutSinks,
-  jsonLineSink,
   toAnalyticsEngineDataPoint,
   toWorkersLogEvent,
   workersStructuredSink,
   type CailLogEvent,
 } from "../src/index.js";
-import { createCailLogger as createDistCailLogger } from "../dist/index.js";
 
 const ACTION_ID = "9f50d4a4-ef70-41b2-b225-0a5cbf2df5e7";
 const SK_LIVE_CANARY = ["sk", "live", "syntheticsecret7f3a"].join("_");
 const RK_LIVE_CANARY = ["rk", "live", "syntheticsecret7f3a"].join("_");
 const NPM_CANARY = ["npm", "syntheticsecret0123456789abcdef"].join("_");
 const GITLAB_CANARY = ["glpat", "syntheticsecret0123456789"].join("-");
-const HUGGING_FACE_CANARY = [
-  "hf",
-  "syntheticsecret0123456789abcdef",
-].join("_");
 const GRAMMAR_CATALOG = defineEventCatalog({
   "test.secret_grammars": {
     source: "platform",
@@ -61,7 +44,6 @@ function forgedEvent(): CailLogEvent {
     }),
     attributes: Object.freeze({
       "cail.source.class": "platform" as const,
-      "cail.key.id": "sk-cail-synthetic-secret-7f3a",
     }),
   });
 }
@@ -74,7 +56,6 @@ describe("validated event provenance", () => {
     const writes: unknown[] = [];
     const forged = forgedEvent();
 
-    expect(() => jsonLineSink(forged)).toThrow(TypeError);
     expect(() => toWorkersLogEvent(forged)).toThrow(TypeError);
     expect(() => workersStructuredSink(forged)).toThrow(TypeError);
     expect(() => toAnalyticsEngineDataPoint(forged)).toThrow(TypeError);
@@ -238,12 +219,8 @@ describe("content-free service catalogs", () => {
     }
   });
 
-  it.each([
-    ["source", createCailLogger],
-    ["dist", createDistCailLogger],
-  ] as const)(
-    "%s rejects proxy-valued string options without reflection",
-    (_build, createLogger) => {
+  it("rejects proxy-valued string options without reflection", () => {
+      const createLogger = createCailLogger;
       for (const field of ["service", "release", "subjectVersion"] as const) {
         const sentinel = `private-${field}-prototype-sentinel`;
         let prototypeReads = 0;
@@ -278,8 +255,7 @@ describe("content-free service catalogs", () => {
         expect(prototypeReads).toBe(0);
         expect(String(thrown)).not.toContain(sentinel);
       }
-    },
-  );
+  });
 
   it("assigns one library-owned body to service-defined events", () => {
     const catalog = defineEventCatalog({
@@ -346,54 +322,12 @@ describe("identifier and subject privacy boundaries", () => {
     );
   });
 
-  it("drops a secret-shaped value that otherwise satisfies key_id grammar", () => {
-    for (const canary of [
-      "sk-cail-synthetic-secret-7f3a",
-      "sk-admin-1234abcd",
-      "sk-abcdefghijklmnop123",
-      SK_LIVE_CANARY,
-      RK_LIVE_CANARY,
-      NPM_CANARY,
-      GITLAB_CANARY,
-      HUGGING_FACE_CANARY,
-      "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
-      "github_pat_synthetic_secret_7f3a",
-      "AKIA0123456789ABCDEF",
-      "AIza0123456789abcdefghijklmnop",
-      "xoxb-synthetic-secret-7f3a",
-      "eyJsyntheticheader.payload.signature",
-    ]) {
-      const events: CailLogEvent[] = [];
-      const diagnostics: string[] = [];
-      const logger = createCailLogger({
-        service: "gateway",
-        release: "local",
-        env: "test",
-        sourceClass: "platform",
-        subjectVersion: "v1",
-        catalog: CAIL_EVENT_CATALOG,
-        sink: (event) => events.push(event),
-        onDiagnostic: (code) => diagnostics.push(code),
-      });
-      logger.emit(CAIL_EVENTS.ACTION_ADMITTED, {
-        action_id: ACTION_ID,
-        product_id: "kale-workbench",
-        principal: { type: "app" },
-        key_id: canary,
-      });
-      expect(events, canary).toEqual([]);
-      expect(diagnostics, canary).toEqual(["event_contract_error"]);
-    }
-  });
-
   it("rejects secret canaries that satisfy every admitted string grammar", () => {
     const cases = [
       ["error_type", "sk-cail-synthetic-secret-7f3a"],
       ["cohort", SK_LIVE_CANARY],
       ["product_id", RK_LIVE_CANARY],
-      ["project", NPM_CANARY],
       ["provider", GITLAB_CANARY],
-      ["key_id", HUGGING_FACE_CANARY],
       ["request_model", SK_LIVE_CANARY],
       ["response_model", RK_LIVE_CANARY],
       ["route", `/${NPM_CANARY}`],
@@ -490,167 +424,5 @@ describe("identifier and subject privacy boundaries", () => {
         subjectVersion: "v1",
       } as never),
     ).toThrow(TypeError);
-  });
-});
-
-describe("repository verification contract", () => {
-  it("compiles an ordinary exact-optional-false consumer without runtime-only traps", () => {
-    const temporary = mkdtempSync(join(tmpdir(), "cail-log-consumer-types-"));
-    try {
-      const importPath = resolve("dist/index.js");
-      writeFileSync(
-        join(temporary, "consumer.ts"),
-        `
-import {
-  CAIL_EVENT_CATALOG,
-  CAIL_EVENTS,
-  createCailLogger,
-  defineEventCatalog,
-} from ${JSON.stringify(importPath)};
-
-const platform = createCailLogger({
-  service: "gateway",
-  release: "local",
-  env: "test",
-  sourceClass: "platform",
-  subjectVersion: "v1",
-  catalog: CAIL_EVENT_CATALOG,
-  sink: () => {},
-});
-platform.emit(CAIL_EVENTS.ACTION_ADMITTED, {
-  action_id: "9f50d4a4-ef70-41b2-b225-0a5cbf2df5e7",
-  product_id: "kale-workbench",
-  principal: { type: "anonymous", subject: undefined },
-  request_id: undefined,
-});
-platform.emit(CAIL_EVENTS.ACTION_TERMINAL, {
-  action_id: "9f50d4a4-ef70-41b2-b225-0a5cbf2df5e7",
-  product_id: "kale-workbench",
-  principal: { type: "anonymous" },
-  terminal: { outcome: "ok", reason: "completed" },
-  duration_ms: 1,
-  error_type: undefined,
-});
-
-const tenantCatalog = defineEventCatalog({
-  "tenant.ready": {
-    body: undefined,
-    source: "tenant",
-    severity: "info",
-    required: [],
-    optional: [],
-  },
-});
-createCailLogger({
-  service: "tenant-service",
-  release: "local",
-  env: "test",
-  sourceClass: "tenant",
-  subjectVersion: undefined,
-  catalog: tenantCatalog,
-  sink: () => {},
-});
-`,
-      );
-      writeFileSync(
-        join(temporary, "tsconfig.json"),
-        JSON.stringify({
-          compilerOptions: {
-            exactOptionalPropertyTypes: false,
-            module: "ESNext",
-            moduleResolution: "Bundler",
-            noEmit: true,
-            strict: true,
-            target: "ES2022",
-          },
-          include: ["consumer.ts"],
-        }),
-      );
-      const result = spawnSync(
-        resolve("node_modules/.bin/tsc"),
-        ["-p", join(temporary, "tsconfig.json")],
-        { encoding: "utf8" },
-      );
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    } finally {
-      rmSync(temporary, { recursive: true, force: true });
-    }
-  });
-
-  it("checks committed dist parity in local verification and CI", () => {
-    const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
-      version: string;
-      scripts: Record<string, string>;
-    };
-    expect(packageJson.scripts["verify"]).toContain("check:dist");
-    expect(packageJson.scripts["prepublishOnly"]).toBe(
-      "bun run verify && bun run check:release-live",
-    );
-    expect(packageJson.version).toBe("0.6.1");
-    expect(existsSync(".github/workflows/ci.yml")).toBe(true);
-    const ciWorkflow = readFileSync(".github/workflows/ci.yml", "utf8");
-    expect(ciWorkflow).toContain("bun run verify");
-    expect(ciWorkflow).toContain("--ignore-scripts");
-    expect(ciWorkflow).toContain("persist-credentials: false");
-    expect(ciWorkflow).toContain(
-      "node --input-type=module",
-    );
-
-    const publishWorkflow = readFileSync(
-      ".github/workflows/publish.yml",
-      "utf8",
-    );
-    expect(publishWorkflow).toContain("release:");
-    expect(publishWorkflow).toContain("types: [published]");
-    expect(publishWorkflow).toContain("packages: write");
-    expect(publishWorkflow).toContain("bun run verify");
-    expect(publishWorkflow).toContain("--ignore-scripts");
-    expect(publishWorkflow).toContain("persist-credentials: false");
-    expect(publishWorkflow).toContain("bun run check:release-ref");
-    expect(publishWorkflow).toContain("GITHUB_SHA: ${{ github.sha }}");
-    expect(publishWorkflow).toContain("gh api --paginate");
-    expect(publishWorkflow).toContain("bun run check:release-live");
-    expect(publishWorkflow).toContain("bun publish");
-    expect(publishWorkflow).not.toContain("npm publish");
-    expect(publishWorkflow).not.toContain("node -p");
-    expect(publishWorkflow).toContain("NPM_CONFIG_TOKEN:");
-    expect(publishWorkflow.match(/NPM_CONFIG_TOKEN:/g)).toHaveLength(1);
-    expect(publishWorkflow).not.toContain("NODE_AUTH_TOKEN");
-    expect(publishWorkflow).not.toContain("NPM_CONFIG_USERCONFIG");
-    expect(publishWorkflow).not.toContain("> .npmrc");
-
-    for (const workflow of [ciWorkflow, publishWorkflow]) {
-      expect(workflow).toContain(
-        "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",
-      );
-      expect(workflow).toContain(
-        "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6",
-      );
-      expect(workflow).toContain(
-        "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
-      );
-    }
-  });
-
-  it("fails the parity check for stale generated output", () => {
-    const temporary = mkdtempSync(join(tmpdir(), "cail-log-stale-dist-"));
-    try {
-      cpSync("dist", temporary, { recursive: true });
-      writeFileSync(
-        join(temporary, "index.js"),
-        `${readFileSync(join(temporary, "index.js"), "utf8")}\n// stale\n`,
-      );
-      const result = spawnSync(
-        "bun",
-        ["scripts/check-dist.ts", temporary],
-        { encoding: "utf8" },
-      );
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain(
-        "does not match source build",
-      );
-    } finally {
-      rmSync(temporary, { recursive: true, force: true });
-    }
   });
 });

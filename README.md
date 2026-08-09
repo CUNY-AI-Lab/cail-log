@@ -19,16 +19,16 @@ storage products still own delivery, sampling, retention, and querying.
 - Event fields are narrowed in TypeScript and validated again at runtime.
 - Service identity and deployment environment are constructor-owned resource
   attributes.
-- Tenant loggers cannot claim platform identity, application, project, model,
-  cost, cohort, user, or quota facts.
+- Tenant loggers cannot claim platform identity, application, model, cost,
+  cohort, or user facts.
 - A malformed field container or a malformed, missing, contradictory, or
   known-but-disallowed defined field drops the event with a content-free
   diagnostic instead of creating a weaker event. An optional property set to
   `undefined` is treated as omitted, matching ordinary TypeScript consumers.
 - Unknown arbitrary keys are ignored and never become log content.
 - Logging and diagnostic failures do not throw into the application path.
-- Sink selection is explicit. The Cloudflare sink emits one structured,
-  queryable JSON object; the JSON-line sink is a separate deliberate choice.
+- Sink selection is explicit. The Workers sink emits one structured, queryable
+  JSON object.
 - `fanoutSinks()` invokes every selected sink even if another fails, so a
   diagnostic destination cannot suppress the fleet-analytics projection.
 - Every exported sink and projection rejects a caller-constructed event before
@@ -40,7 +40,7 @@ storage products still own delivery, sampling, retention, and querying.
 These rules close common free-text channels. They cannot prove the semantic
 origin of every valid machine identifier. Trusted platform callers still have
 to classify values correctly and must not place personal data in fields such
-as model, key, cohort, or project identifiers.
+as model, cohort, or provider identifiers.
 
 The guarantee applies to the supported public path: a validated catalog,
 `createCailLogger()`, and adapters from the same installed package instance.
@@ -53,7 +53,7 @@ and the canary suite covers PII-shaped values, secret shapes that deliberately
 fit identifier fields, error paths, catalog names, and direct adapter calls.
 It cannot establish semantic provenance for every syntactically valid
 identifier. Trusted platform callers must still keep personal data out of
-model, key, cohort, project, provider, and other machine-identifier fields.
+model, cohort, provider, and other machine-identifier fields.
 
 ## Install
 
@@ -65,25 +65,15 @@ only — never commit a token):
 @cuny-ai-lab:registry=https://npm.pkg.github.com
 ```
 
-Pin the reviewed release exactly — while the package remains below `1.0.0`,
-for example `"@cuny-ai-lab/cail-log": "0.6.0"` — then run `bun install` with
-`NODE_AUTH_TOKEN` set in the environment to a GitHub PAT that has
-`read:packages` (supplied by a user-level `~/.npmrc` or a CI secret).
-Version `0.6.0` is the independently verified published artifact. Its release
-tag, source commit, successful publish workflow, GitHub Packages version, and
-downloaded tarball bytes are recorded in
-[`evidence/package-release-authority-published.json`](evidence/package-release-authority-published.json).
-That record is historical evidence, not permission to republish the occupied
-version. A future release must use a new package version; its preflight queries
-all active registry pages immediately before publishing and fails closed if the
-target version is present or the response is incomplete.
+Pin an exact published release, then run `bun install` with `NODE_AUTH_TOKEN`
+set in the environment to a GitHub PAT that has `read:packages` (supplied by a
+user-level `~/.npmrc` or a CI secret).
 
-Maintainers publish by creating a GitHub release whose `vX.Y.Z` tag exactly
-matches `package.json`. The workflow resolves lightweight or annotated tags,
-requires the tag commit to equal `GITHUB_SHA` and the live default-branch head,
-reruns verification and a high-severity audit, then publishes with Bun's
-documented `NPM_CONFIG_TOKEN` registry configuration. The published package
-ships `dist`, so consumers do not need a build step.
+Maintainers publish a stable (non-prerelease) GitHub release whose `vX.Y.Z` tag
+matches `package.json`. The workflow checks out that tag, installs with the
+frozen Bun lockfile, verifies the tag's package version, runs the package
+checks, tests, type-check, build, and pack check, then publishes to GitHub
+Packages. The published package includes generated `dist` files.
 
 ## Create a logger
 
@@ -145,7 +135,6 @@ not pass one of these definition functions.
 | `cail.request.received` | request, product, HTTP method, route template |
 | `cail.request.completed` | request, product, HTTP facts, outcome/reason, duration |
 | `cail.auth.denied` | request, product, principal, HTTP facts, denied outcome |
-| `cail.quota.charged` | product, principal, successful outcome, quota snapshot |
 | `cail.upstream.error` | request, product, failed outcome, safe error type |
 | `cail.model.call.admitted` | call, action, product, principal, provider, requested model |
 | `cail.model.call.terminal` | admitted-call fields plus outcome/reason and duration |
@@ -195,10 +184,8 @@ example, `resource["service.name"]` becomes the top-level key `service.name`.
 Cloudflare Workers Logs can then filter, group, and aggregate those fields
 without making Cloudflare's storage format the portable package contract.
 
-The two console sinks carry every field from the accepted event. Their JSON
-layouts differ. `jsonLineSink` writes the nested portable record as one NDJSON
-line;
-`workersStructuredSink` flattens resources and attributes, renames
+`workersStructuredSink` carries every field from the accepted event in one flat
+JSON object. It flattens resources and attributes, renames
 `schema_version` to `cail.schema.version` and `event_name` to `event.name`, and
 passes one object to Cloudflare. Exact severity remains in `severity_text` and
 `severity_number`. Cloudflare console severity is coarser: fatal and error use
@@ -245,14 +232,11 @@ trusted `product_id`, with a namespaced service fallback for service-local
 events. This prevents noisy test or staging traffic from sharing a production
 sampling boundary.
 
-The fleet projection intentionally omits quota values, stable user pseudonyms,
-credential key identifiers, per-event UUIDs, usage facts, and Kale
-tenant-project identity. Model-limit state and Sandbox allocation come from
-their authoritative accounting APIs; identifiable user and credential reads
-are audited and resolved there on demand. Kale tenant state comes from its
-control plane. The aggregate projection retains the privacy-safer cohort. Blob
-positions 16–20 and double positions 14–20 are reserved for append-only schema
-growth.
+The fleet projection intentionally omits stable user pseudonyms, per-event
+UUIDs, and settled usage facts. Model-limit state and Sandbox allocation come
+from their authoritative accounting APIs. The aggregate projection retains the
+privacy-safer cohort. Unused blob and double positions remain reserved for
+future schema growth.
 
 Analytics Engine is diagnostic only. It may sample, retains data for its native
 platform window, and cannot replace authoritative product state, model
@@ -262,12 +246,9 @@ pairing, duplicates, missing terminals, and individual event sequences require
 a product-owned durable state store; Analytics Engine cannot prove them even
 when the observed sample interval is one.
 
-The adapter writes one point for each accepted event. Cloudflare currently
-allows 250 Analytics Engine points per Worker invocation; the exported
-`CAIL_ANALYTICS_ENGINE_MAX_POINTS_PER_INVOCATION` constant lets producer
-adapters enforce that platform ceiling. Canonical producers emit a bounded
-number of lifecycle events per invocation and must not use `cail-log` as a
-bulk-event transport.
+The adapter writes one point for each accepted event. Canonical producers emit
+a bounded number of lifecycle events per invocation and must not use `cail-log`
+as a bulk-event transport.
 
 `toAnalyticsEngineDataPoint()` and `createAnalyticsEngineSink()` enforce the
 same logger-produced-record gate as the console sinks. A caller-constructed
@@ -294,13 +275,10 @@ conventions when one exists.
 | `terminal.reason` | `cail.outcome.reason` | both |
 | `error_type` | `error.type` | both |
 | `req_bytes` | `http.request.body.size` | both |
-| `resp_bytes` | `http.response.body.size` | both |
 | `principal.type` | `cail.principal.type` | platform |
 | `principal.subject` | `enduser.pseudo.id` | platform |
 | `cohort` | `cail.cohort.id` | platform |
-| `key_id` | `cail.key.id` | platform |
 | `product_id` | `cail.product.id` | platform |
-| `project` | `cail.kale.project.name` | platform |
 | `provider` | `gen_ai.provider.name` | platform |
 | `request_model` | `gen_ai.request.model` | platform |
 | `response_model` | `gen_ai.response.model` | platform |
@@ -316,10 +294,8 @@ plus `_OTHER`. The `route` grammar accepts bounded path templates such as
 `/users/{user_id}` and rejects URLs, queries, and control characters. Syntax
 cannot distinguish a safe static router template from an identifier-bearing
 raw path such as `/users/example-user`; the trusted producer must pass the
-router template and keep a raw-path canary in its tests. In portable schema 2,
-`route` emits as `url.template` for compatibility. OpenTelemetry 1.43 uses
-`http.route` for inbound server routes, so correcting that name requires a
-deliberate portable schema change rather than a patch release.
+router template and keep a raw-path canary in its tests. The portable record
+uses `url.template` for the route attribute.
 
 Product outcome is explicit and does not derive from HTTP status, so an
 application failure returned in an HTTP 200 response remains visible. Outcome
@@ -334,16 +310,8 @@ anonymous, app, and service principals cannot carry one; trace context is
 all-or-nothing; and each outcome accepts only its closed reason set. The sink
 still emits scalar OpenTelemetry-aligned record fields and attributes.
 
-`key_id` is a credential identifier, not a secret value. It is accepted only
-with an app, service, user, or canary principal; missing and anonymous
-principals are contradictory. The identifier remains linkable security data,
-must come from the trusted authentication boundary, and is deliberately absent
-from the Analytics Engine projection.
-
 `service.name` is the emitting component. `product_id` is trusted per-event
-attribution for a fleet product such as Workbench or Site Studio. `project` is
-only a Kale Deploy tenant project. Shared gateways must not conflate these
-three scopes.
+attribution for a fleet product such as Workbench or Site Studio.
 
 The canonical subject shape is
 `cail-<version>-<32-lowercase-hex-characters>`. Platform logger construction
@@ -366,62 +334,31 @@ fields.
 
 ### Numeric field semantics
 
-- `req_bytes` and `resp_bytes` are nonnegative safe-integer payload-body bytes,
-  excluding headers. When transport encoding compresses the body, record the
-  transferred compressed size.
+- `req_bytes` is a nonnegative safe-integer request-body size excluding
+  headers.
 - `input_tokens` and `output_tokens` are nonnegative safe-integer totals for
   the one model call. Input totals include cached input tokens and output totals
   include reasoning tokens when the provider reports those components.
 - `cost_micro_usd` is a nonnegative safe-integer observed model-call cost in
   millionths of one US dollar. It carries no cost source or quality and is not
   an accounting adjustment or charge authority.
-- `duration_ms` and `upstream_ms` are finite, nonnegative milliseconds and may
-  be fractional. Retry counts, byte counts, token counts, money, quota values,
-  and settled usage quantities must be safe integers.
+- `duration_ms` is finite, nonnegative milliseconds and may be fractional.
+  Retry counts, byte counts, token counts, money, and settled usage quantities
+  must be safe integers.
 - Settled Sandbox usage is exact integer MiB-milliseconds from the trusted
   meter. GiB-seconds and allocated cost are downstream derived facts.
 
 Omission means unknown or unavailable; an explicit zero means measured zero.
-Workers Logs and NDJSON omit absent attributes. The Analytics Engine projection
+Workers Logs omit absent attributes. The Analytics Engine projection
 uses `-1` for missing nonnegative numeric facts. Operational cost and token
 fields remain diagnostic observations; the durable accounting service owns
 cost quality, reconciliation, corrections, and authoritative totals.
 
-## Quotas
-
-Quota input contains `kind`, its matching `unit`, `state`, `limit`, `used`, and
-an ISO-8601 reset timestamp. The logger derives `remaining` as
-`max(limit - used, 0)` and emits scalar `cail.quota.*` attributes.
-
-```ts
-log.emit(CAIL_EVENTS.QUOTA_CHARGED, {
-  product_id: "kale-workbench",
-  principal: {
-    type: "user",
-    subject: "cail-v1-0123456789abcdef0123456789abcdef",
-  },
-  terminal: { outcome: "ok", reason: "completed" },
-  quota: {
-    kind: "model_spend",
-    unit: "micro_usd",
-    state: "fresh",
-    limit: 10_000_000,
-    used: 188_977,
-    reset_at: "2026-08-12T16:00:00.000Z",
-  },
-});
-```
-
-Valid pairs are `model_spend`/`micro_usd`, `request_count`/`requests`,
-`build_count`/`builds`, `storage`/`bytes`, `compute`/`milliseconds`, and
-`sandbox_compute`/`gib_seconds`.
-
 ## Settled usage
 
-Quota is a window snapshot; settled usage is an immutable measured occurrence.
 The canonical `cail.sandbox.usage.settled` event requires a platform-minted
 `usage_id`, trusted product and principal attribution, and exact integer
-`sandbox_compute`/`mib_milliseconds`. A quota snapshot may accompany it.
+`sandbox_compute`/`mib_milliseconds`.
 
 The log is not the charge authority. SandboxMeter settlement and durable
 accounting ingestion happen first. The event is emitted only after accounting
@@ -477,10 +414,9 @@ The W3C baseline is the 2021 Trace Context Recommendation: the helper carries
 the sampled bit, creates a fresh span for each hop, forwards valid
 `tracestate`, and emits version `00`. `X-CAIL-Request-Id` is a separate CAIL
 contract. Only a lowercase UUID v4 or UUID v7 in that header is adopted. Other
-UUID versions, uppercase values, malformed values, and the compatibility-only
-`X-Request-Id` alias are not adopted; a new UUID v4 is minted instead. Every
-fleet ingress must normalize to `X-CAIL-Request-Id` before relying on
-cross-service request-ID correlation.
+UUID versions, uppercase values, and malformed values cause a new UUID v4 to be
+minted. Every fleet ingress must normalize to `X-CAIL-Request-Id` before
+relying on cross-service request-ID correlation.
 
 ## Diagnostics and sensitive values
 
@@ -489,7 +425,7 @@ The optional `onDiagnostic` callback receives one closed code: `clock_error`,
 never receives the original error or event content.
 
 The logger contains synchronous throws and rejected promise-like returns from
-both sinks and diagnostic callbacks. It does not await asynchronous delivery.
+the sink and diagnostic callbacks. It does not await asynchronous delivery.
 A Cloudflare sink that performs I/O must synchronously register that promise
 with `ExecutionContext.waitUntil()` so the runtime keeps it alive; returning a
 promise to `cail-log` only gives the library a rejection to contain.
@@ -500,9 +436,9 @@ action/call store is authoritative; log events are diagnostic projections of
 admission and terminal transitions.
 
 The package does not retry a sink, deduplicate events, enforce idempotency,
-authorize callers, enforce quotas, or resolve an ambiguous delivery outcome.
-Those responsibilities remain with the producer and the durable service that
-owns the underlying state transition.
+authorize callers, or resolve an ambiguous delivery outcome. Those
+responsibilities remain with the producer and the durable service that owns the
+underlying state transition.
 
 `sensitive(value)` wraps a secret so string conversion, JSON serialization,
 template interpolation, and Node inspection produce `[REDACTED]`. A wrapper in
@@ -527,23 +463,15 @@ The Cloudflare projection follows
 Privacy and failure behavior follow the
 [OWASP Logging Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html).
 
-Semantic conventions evolve, especially GenAI attributes. A future convention
-change requires an explicit schema decision; the package will not silently
-rename emitted fields.
+Semantic conventions evolve, especially GenAI attributes. Changes require an
+explicit schema decision; the package will not silently rename emitted fields.
 
 Portable `schema_version` is currently `2`. The Analytics Engine
 projection has its own exported schema version and append-only positional
 mapping. The package version, component `service.version`, and service-local
 catalog version are separate concerns. Producers that add or change
 service-local event definitions must version their event contract; the shared
-`schema_version` does not make two differently defined local events compatible.
-
-Schema-1 platform consumers must add `subjectVersion`, move pseudonyms to
-`cail-<version>-<32-lowercase-hex>`, remove service-local catalog bodies, and
-stop constructing events for adapters directly. Collectors should branch on
-`schema_version` during a mixed rollout. No database migration exists in this
-repository. Analytics Engine projection schema 1 remains append-only and stores
-portable schema 2 in its `log_schema_version` column.
+`schema_version` does not define those local events.
 
 ## Development
 
@@ -552,26 +480,23 @@ bun install
 bun run test
 bun run typecheck
 bun run build
-bun run check:dist
 bun run verify
 ```
 
 The suite covers the record envelope, Cloudflare projection, closed event
-catalogs, trust profiles, quota consistency, hostile inputs, failure
+catalogs, trust profiles, hostile inputs, failure
 containment, W3C propagation, and a PII-shaped canary attempted through every
 runtime field.
 
-`check:dist` compiles into an isolated temporary directory and byte-compares
-that output with committed `dist`, normalizing only source-map paths. `verify`
-runs that parity check, tests, type-checks, and package-content inspection. The
-committed CI workflow installs with the frozen Bun lockfile, audits at high
-severity, and runs `verify` on pull requests and pushes to `main`. Publishing
-occurs only from a GitHub release after the workflow verifies the release tag,
-package version, live default-branch head, unoccupied registry version, tests,
-types, committed `dist`, and package contents.
+`verify` builds generated `dist`, runs tests and type-checking, and inspects the
+package contents. `dist` is generated at build and is not committed. CI installs
+from the frozen Bun lockfile and runs the same command. Publishing occurs only
+from a stable GitHub release after the workflow checks the tag's package
+version, runs the package checks, tests, type-check, build, and pack check, and
+then publishes.
 
-[DESIGN.md](DESIGN.md) is the canonical architecture, security, operations,
-adoption, and rollback guide. This README is the consumer guide.
+[DESIGN.md](DESIGN.md) is the canonical architecture, security, and operations
+guide. This README is the consumer guide.
 
 ## License
 
