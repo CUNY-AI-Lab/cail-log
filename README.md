@@ -572,6 +572,8 @@ types, committed `dist`, and package contents.
 
 [DESIGN.md](DESIGN.md) is the canonical architecture, security, operations,
 adoption, and rollback guide. This README is the consumer guide.
+[DESIGN_GATE.md](DESIGN_GATE.md) records the retained contract and evidence
+required before handoff.
 
 ## License
 

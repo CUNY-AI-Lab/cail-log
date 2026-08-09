@@ -8,5 +8,8 @@
 - Producers own service business meaning, lifecycle state, identity, authorization, quotas, accounting, retries, and idempotency.
 - Do not add service-specific business logic, identity derivation, authorization, quota enforcement, or delivery guarantees here.
 - Keep emitted records scalar and contract-shaped so all configured sinks receive the same event.
+- Use [DESIGN_GATE.md](DESIGN_GATE.md) for the retained surface, deliberate
+  cuts, and runtime evidence required before handoff.
 
-Check with `bun run verify`.
+Check with `bun run verify`, then run one built-package event through the real
+Workers or Analytics Engine adapter boundary being changed.
