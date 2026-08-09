@@ -60,27 +60,6 @@ describe("privacy canary", () => {
       { terminal: { outcome: CANARY, reason: "unknown" } },
       { terminal: { outcome: "outcome_unknown", reason: CANARY } },
       {
-        quota: {
-          kind: "request_count",
-          unit: "requests",
-          state: "fresh",
-          limit: 10,
-          used: 1,
-          reset_at: CANARY,
-        },
-      },
-      {
-        quota: {
-          kind: "request_count",
-          unit: "requests",
-          state: "fresh",
-          limit: 10,
-          used: 1,
-          reset_at: "2026-08-01T00:00:00.000Z",
-          note: CANARY,
-        },
-      },
-      {
         usage: {
           kind: "sandbox_compute",
           unit: "mib_milliseconds",

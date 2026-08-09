@@ -82,7 +82,6 @@ export type CailTerminalFields =
   | Readonly<{ outcome: "cancelled"; reason: "cancelled" }>
   | Readonly<{ outcome: "timeout"; reason: "timeout" }>
   | Readonly<{ outcome: "outcome_unknown"; reason: "unknown" }>;
-export type CailQuotaState = "fresh" | "stale";
 export type CailHttpMethod =
   | "CONNECT"
   | "DELETE"
@@ -95,25 +94,6 @@ export type CailHttpMethod =
   | "QUERY"
   | "TRACE"
   | "_OTHER";
-
-export type CailQuotaKindUnit =
-  | { kind: "model_spend"; unit: "micro_usd" }
-  | { kind: "request_count"; unit: "requests" }
-  | { kind: "build_count"; unit: "builds" }
-  | { kind: "storage"; unit: "bytes" }
-  | { kind: "compute"; unit: "milliseconds" }
-  | { kind: "sandbox_compute"; unit: "gib_seconds" };
-
-export type CailQuotaFields = CailQuotaKindUnit & {
-  state: CailQuotaState;
-  limit: number;
-  used: number;
-  reset_at: string;
-};
-
-export type CailQuotaEvent = CailQuotaFields & {
-  remaining: number;
-};
 
 export type CailUsageKindUnit = {
   kind: "sandbox_compute";
@@ -136,22 +116,17 @@ export interface CailTenantLogFields {
   terminal?: CailTerminalFields;
 
   duration_ms?: number;
-  upstream_ms?: number;
   error_type?: string;
   retry_count?: number;
 
   req_bytes?: number;
-  resp_bytes?: number;
 }
 
 export interface CailPlatformLogFields extends CailTenantLogFields {
   usage_id?: string;
   principal?: CailPrincipalFields;
   cohort?: string;
-  key_id?: string;
-
   product_id?: string;
-  project?: string;
 
   provider?: string;
   request_model?: string;
@@ -160,7 +135,6 @@ export interface CailPlatformLogFields extends CailTenantLogFields {
   output_tokens?: number;
   cost_micro_usd?: number;
 
-  quota?: CailQuotaFields;
   usage?: CailUsageFields;
 }
 
@@ -188,19 +162,15 @@ export type CailLogAttributes = Readonly<{
   "cail.outcome"?: CailOutcome;
   "cail.outcome.reason"?: CailTerminalReason;
   "cail.operation.duration_ms"?: number;
-  "cail.upstream.duration_ms"?: number;
   "error.type"?: string;
   "cail.retry.count"?: number;
   "http.request.body.size"?: number;
-  "http.response.body.size"?: number;
 
   "cail.principal.type"?: CailPrincipalType;
   "cail.usage.id"?: string;
   "enduser.pseudo.id"?: string;
   "cail.cohort.id"?: string;
-  "cail.key.id"?: string;
   "cail.product.id"?: string;
-  "cail.kale.project.name"?: string;
 
   "gen_ai.provider.name"?: string;
   "gen_ai.request.model"?: string;
@@ -208,14 +178,6 @@ export type CailLogAttributes = Readonly<{
   "gen_ai.usage.input_tokens"?: number;
   "gen_ai.usage.output_tokens"?: number;
   "cail.gen_ai.cost.micro_usd"?: number;
-
-  "cail.quota.kind"?: CailQuotaKindUnit["kind"];
-  "cail.quota.unit"?: CailQuotaKindUnit["unit"];
-  "cail.quota.state"?: CailQuotaState;
-  "cail.quota.limit"?: number;
-  "cail.quota.used"?: number;
-  "cail.quota.remaining"?: number;
-  "cail.quota.reset_at"?: string;
 
   "cail.usage.kind"?: CailUsageKindUnit["kind"];
   "cail.usage.unit"?: CailUsageKindUnit["unit"];
@@ -324,27 +286,22 @@ export const CAIL_TENANT_FIELD_NAMES = Object.freeze([
   "status",
   "terminal",
   "duration_ms",
-  "upstream_ms",
   "error_type",
   "retry_count",
   "req_bytes",
-  "resp_bytes",
 ] as const satisfies readonly CailTenantLogFieldName[]);
 
 export const CAIL_PLATFORM_ONLY_FIELD_NAMES = Object.freeze([
   "usage_id",
   "principal",
   "cohort",
-  "key_id",
   "product_id",
-  "project",
   "provider",
   "request_model",
   "response_model",
   "input_tokens",
   "output_tokens",
   "cost_micro_usd",
-  "quota",
   "usage",
 ] as const satisfies readonly Exclude<
   CailPlatformLogFieldName,
@@ -362,7 +319,6 @@ export const CAIL_EVENTS = Object.freeze({
   REQUEST_RECEIVED: "cail.request.received",
   REQUEST_COMPLETED: "cail.request.completed",
   AUTH_DENIED: "cail.auth.denied",
-  QUOTA_CHARGED: "cail.quota.charged",
   UPSTREAM_ERROR: "cail.upstream.error",
   MODEL_CALL_ADMITTED: "cail.model.call.admitted",
   MODEL_CALL_TERMINAL: "cail.model.call.terminal",
@@ -521,17 +477,6 @@ function buildEventCatalog<
         "cail-log: outcome severity requires the terminal field",
       );
     }
-    if (required.includes("key_id") && !required.includes("principal")) {
-      throw new TypeError(
-        "cail-log: required key identity requires a required principal field",
-      );
-    }
-    if (combined.includes("key_id") && !combined.includes("principal")) {
-      throw new TypeError(
-        "cail-log: key identity requires an allowed principal field",
-      );
-    }
-
     const allowedOutcomes = definition.outcomes
       ? [...definition.outcomes]
       : undefined;
@@ -680,56 +625,50 @@ export const CAIL_EVENT_CATALOG = buildEventCatalog({
   [CAIL_EVENTS.ACTION_ADMITTED]: {
     body: "Action admitted.", source: "platform", severity: "info",
     required: ["action_id", "product_id", "principal"],
-    optional: ["request_id", "trace", "cohort", "key_id", "project", "http_method", "route"],
+    optional: ["request_id", "trace", "cohort", "http_method", "route"],
   },
   [CAIL_EVENTS.ACTION_TERMINAL]: {
     body: "Action reached a terminal state.", source: "platform", severity: "outcome",
     required: ["action_id", "product_id", "principal", "terminal", "duration_ms"],
-    optional: ["request_id", "trace", "cohort", "key_id", "project", "http_method", "route", "error_type", "retry_count"],
+    optional: ["request_id", "trace", "cohort", "http_method", "route", "error_type", "retry_count"],
   },
   [CAIL_EVENTS.REQUEST_RECEIVED]: {
     body: "Request received.", source: "platform", severity: "info",
     required: ["request_id", "product_id", "http_method", "route"],
-    optional: ["trace", "principal", "cohort", "key_id", "project", "req_bytes"],
+    optional: ["trace", "principal", "cohort", "req_bytes"],
   },
   [CAIL_EVENTS.REQUEST_COMPLETED]: {
     body: "Request completed.", source: "platform", severity: "outcome",
     required: ["request_id", "product_id", "http_method", "route", "status", "terminal", "duration_ms"],
-    optional: ["action_id", "call_id", "trace", "principal", "cohort", "key_id", "project", "upstream_ms", "error_type", "retry_count", "req_bytes", "resp_bytes"],
+    optional: ["action_id", "call_id", "trace", "principal", "cohort", "error_type", "retry_count", "req_bytes"],
   },
   [CAIL_EVENTS.AUTH_DENIED]: {
     body: "Authentication or authorization denied.", source: "platform", severity: "warn",
     required: ["request_id", "product_id", "principal", "http_method", "route", "status", "terminal"],
-    optional: ["trace", "cohort", "project", "error_type"],
+    optional: ["trace", "cohort", "error_type"],
     outcomes: ["denied"], terminal_reasons: ["denied"],
-  },
-  [CAIL_EVENTS.QUOTA_CHARGED]: {
-    body: "Quota charged.", source: "platform", severity: "info",
-    required: ["product_id", "principal", "terminal", "quota"],
-    optional: ["request_id", "action_id", "call_id", "trace", "cohort", "key_id", "project"],
-    outcomes: ["ok"], terminal_reasons: ["completed"],
   },
   [CAIL_EVENTS.UPSTREAM_ERROR]: {
     body: "Upstream provider call failed.", source: "platform", severity: "error",
     required: ["request_id", "product_id", "terminal", "error_type"],
-    optional: ["action_id", "call_id", "trace", "principal", "cohort", "project", "provider", "request_model", "response_model", "status", "duration_ms", "upstream_ms", "retry_count"],
+    optional: ["action_id", "call_id", "trace", "principal", "cohort", "provider", "request_model", "response_model", "status", "duration_ms", "retry_count"],
     outcomes: ["error", "timeout", "outcome_unknown"],
     terminal_reasons: ["upstream_failure", "timeout", "unknown"],
   },
   [CAIL_EVENTS.MODEL_CALL_ADMITTED]: {
     body: "Model call admitted.", source: "platform", severity: "info",
     required: ["call_id", "action_id", "product_id", "principal", "provider", "request_model"],
-    optional: ["request_id", "trace", "cohort", "key_id", "project", "quota"],
+    optional: ["request_id", "trace", "cohort"],
   },
   [CAIL_EVENTS.MODEL_CALL_TERMINAL]: {
     body: "Model call reached a terminal state.", source: "platform", severity: "outcome",
     required: ["call_id", "action_id", "product_id", "principal", "provider", "request_model", "terminal", "duration_ms"],
-    optional: ["request_id", "trace", "cohort", "key_id", "project", "response_model", "input_tokens", "output_tokens", "cost_micro_usd", "quota", "status", "upstream_ms", "error_type", "retry_count"],
+    optional: ["request_id", "trace", "cohort", "response_model", "input_tokens", "output_tokens", "cost_micro_usd", "status", "error_type", "retry_count"],
   },
   [CAIL_EVENTS.SANDBOX_USAGE_SETTLED]: {
     body: "Sandbox usage settled.", source: "platform", severity: "info",
     required: ["usage_id", "product_id", "principal", "terminal", "usage"],
-    optional: ["request_id", "action_id", "trace", "cohort", "key_id", "project", "quota", "duration_ms", "retry_count"],
+    optional: ["request_id", "action_id", "trace", "cohort", "duration_ms", "retry_count"],
     outcomes: ["ok"], terminal_reasons: ["completed"],
   },
 }, true);

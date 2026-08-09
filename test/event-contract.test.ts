@@ -4,7 +4,6 @@ import {
   CAIL_EVENTS,
   createCailLogger,
   defineEventCatalog,
-  jsonLineSink,
   type CailLogEvent,
 } from "../src/index.js";
 
@@ -42,14 +41,6 @@ describe("canonical event contracts", () => {
         kind: "sandbox_compute",
         unit: "mib_milliseconds",
         quantity: 67_108_864,
-      },
-      quota: {
-        kind: "sandbox_compute",
-        unit: "gib_seconds",
-        state: "fresh",
-        limit: 1_000,
-        used: 66,
-        reset_at: "2026-08-01T00:00:00.000Z",
       },
     });
 
@@ -153,42 +144,6 @@ describe("canonical event contracts", () => {
     expect(diagnostics).toEqual([]);
   });
 
-  it("requires key identifiers to have a non-anonymous principal", () => {
-    for (const fields of [
-      {
-        request_id: "0af7651b-16f9-4a3b-8f42-00f067aa0ba9",
-        product_id: "kale-workbench",
-        http_method: "POST",
-        route: "/v1/actions",
-        key_id: "kid-1",
-      },
-      {
-        request_id: "0af7651b-16f9-4a3b-8f42-00f067aa0ba9",
-        product_id: "kale-workbench",
-        http_method: "POST",
-        route: "/v1/actions",
-        principal: { type: "anonymous" },
-        key_id: "kid-1",
-      },
-    ]) {
-      const { diagnostics, events, logger } = capture();
-      logger.emit(CAIL_EVENTS.REQUEST_RECEIVED, fields as never);
-      expect(events).toEqual([]);
-      expect(diagnostics).toEqual(["event_contract_error"]);
-    }
-
-    const valid = capture();
-    valid.logger.emit(CAIL_EVENTS.REQUEST_RECEIVED, {
-      request_id: "0af7651b-16f9-4a3b-8f42-00f067aa0ba9",
-      product_id: "kale-workbench",
-      http_method: "POST",
-      route: "/v1/actions",
-      principal: { type: "app" },
-      key_id: "kid-1",
-    });
-    expect(valid.events).toHaveLength(1);
-    expect(valid.diagnostics).toEqual([]);
-  });
 
   it("drops a known field that is not allowed for that event", () => {
     const { diagnostics, events, logger } = capture();
@@ -286,28 +241,6 @@ describe("catalog and sink gates", () => {
     }
   });
 
-  it("rejects a catalog that exposes key identity without principal semantics", () => {
-    for (const definition of [
-      {
-        source: "platform",
-        severity: "info",
-        required: [],
-        optional: ["key_id"],
-      },
-      {
-        source: "platform",
-        severity: "info",
-        required: ["key_id"],
-        optional: ["principal"],
-      },
-    ] as const) {
-      expect(() =>
-        defineEventCatalog({
-          "bad.key_without_principal": definition,
-        }),
-      ).toThrow(TypeError);
-    }
-  });
 
   it("requires callers to choose a sink explicitly", () => {
     expect(() =>
@@ -324,26 +257,4 @@ describe("catalog and sink gates", () => {
     ).toThrow(TypeError);
   });
 
-  it("offers an explicit JSON-line sink for line-oriented runtimes", () => {
-    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const { logger } = capture();
-    const lineLogger = createCailLogger({
-      service: "sandbox-bridge",
-      release: "local",
-      env: "test",
-      sourceClass: "platform",
-      subjectVersion: "v1",
-      catalog: CAIL_EVENT_CATALOG,
-      sink: jsonLineSink,
-    });
-    lineLogger.emit(CAIL_EVENTS.ACTION_ADMITTED, {
-      action_id: ACTION_ID,
-      product_id: "kale-workbench",
-      principal: { type: "anonymous" },
-    });
-    expect(consoleSpy).toHaveBeenCalledTimes(1);
-    expect(typeof consoleSpy.mock.calls[0]![0]).toBe("string");
-    expect(logger).toBeDefined();
-    vi.restoreAllMocks();
-  });
 });

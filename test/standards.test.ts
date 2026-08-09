@@ -55,7 +55,6 @@ describe("OpenTelemetry-aligned record", () => {
         trace_flags: 1,
       },
       req_bytes: 120,
-      resp_bytes: 0,
     });
     expect(events[0]).toMatchObject({
       timestamp: "2026-07-13T16:00:00.000Z",
@@ -73,7 +72,6 @@ describe("OpenTelemetry-aligned record", () => {
         "url.template": "/tenant/{project}/dispatch",
         "http.response.status_code": 204,
         "http.request.body.size": 120,
-        "http.response.body.size": 0,
       },
     });
   });

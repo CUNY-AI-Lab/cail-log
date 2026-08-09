@@ -26,7 +26,6 @@ import {
   type CailLogLevel,
   type CailOutcome,
   type CailPlatformLogFieldName,
-  type CailQuotaEvent,
   type CailSourceClass,
   type CailTerminalFields,
 } from "./schema.js";
@@ -126,8 +125,7 @@ type CailFieldsFor<
   Definition extends CailEventDefinition,
   Source extends CailSourceClass,
 > = CailBaseFieldsFor<Definition, Source> &
-  CailSuccessErrorConstraint<Definition> &
-  CailKeyPrincipalConstraint<Definition>;
+  CailSuccessErrorConstraint<Definition>;
 
 type CailBaseFieldsFor<
   Definition extends CailEventDefinition,
@@ -167,20 +165,6 @@ type CailSuccessErrorConstraint<Definition extends CailEventDefinition> =
               error_type?: never;
             }
       : unknown
-    : unknown;
-
-type CailAuthenticatedPrincipalFields =
-  | Readonly<{ type: "user" | "canary"; subject: string }>
-  | Readonly<{ type: "app" | "service"; subject?: never }>;
-
-type CailKeyPrincipalConstraint<Definition extends CailEventDefinition> =
-  "key_id" extends CailAllowedFieldNames<Definition>
-    ?
-        | { key_id?: never }
-        | {
-            key_id: string;
-            principal: CailAuthenticatedPrincipalFields;
-          }
     : unknown;
 
 type CailEmitArguments<
@@ -310,19 +294,15 @@ const COMMON_FIELD_DEFS: Readonly<Record<string, FieldDefinition>> = Object.free
   route: ["url.template", sanitizeRouteTemplate],
   status: ["http.response.status_code", sanitizeStatus],
   duration_ms: ["cail.operation.duration_ms", sanitizeDuration],
-  upstream_ms: ["cail.upstream.duration_ms", sanitizeDuration],
   error_type: ["error.type", (value) => sanitizePattern(value, SLUG_RE)],
   retry_count: ["cail.retry.count", sanitizeCounter],
   req_bytes: ["http.request.body.size", sanitizeCounter],
-  resp_bytes: ["http.response.body.size", sanitizeCounter],
 });
 
 const PLATFORM_FIELD_DEFS: Readonly<Record<string, FieldDefinition>> = Object.freeze({
   usage_id: ["cail.usage.id", (value) => sanitizePattern(value, EVENT_ID_RE)],
   cohort: ["cail.cohort.id", (value) => sanitizePattern(value, SLUG_RE)],
-  key_id: ["cail.key.id", (value) => sanitizePattern(value, MACHINE_ID_RE)],
   product_id: ["cail.product.id", (value) => sanitizePattern(value, SLUG_RE)],
-  project: ["cail.kale.project.name", (value) => sanitizePattern(value, SLUG_RE)],
   provider: ["gen_ai.provider.name", (value) => sanitizePattern(value, SLUG_RE)],
   request_model: ["gen_ai.request.model", (value) => sanitizePattern(value, MODEL_ID_RE)],
   response_model: ["gen_ai.response.model", (value) => sanitizePattern(value, MODEL_ID_RE)],
@@ -330,55 +310,6 @@ const PLATFORM_FIELD_DEFS: Readonly<Record<string, FieldDefinition>> = Object.fr
   output_tokens: ["gen_ai.usage.output_tokens", sanitizeCounter],
   cost_micro_usd: ["cail.gen_ai.cost.micro_usd", sanitizeCounter],
 });
-
-const QUOTA_UNITS: Readonly<Record<string, string>> = Object.freeze({
-  model_spend: "micro_usd",
-  request_count: "requests",
-  build_count: "builds",
-  storage: "bytes",
-  compute: "milliseconds",
-  sandbox_compute: "gib_seconds",
-});
-
-function sanitizeIsoTimestamp(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const milliseconds = Date.parse(value);
-  if (!Number.isFinite(milliseconds)) return undefined;
-  return new Date(milliseconds).toISOString() === value ? value : undefined;
-}
-
-function sanitizeQuota(value: unknown): CailQuotaEvent | undefined {
-  if (!isPlainObject(value)) return undefined;
-
-  const kind = sanitizePattern(value["kind"], SLUG_RE);
-  const unit = sanitizePattern(value["unit"], SLUG_RE);
-  const state = sanitizeEnum(value["state"], ["fresh", "stale"]);
-  const limit = sanitizeCounter(value["limit"]);
-  const used = sanitizeCounter(value["used"]);
-  const resetAt = sanitizeIsoTimestamp(value["reset_at"]);
-
-  if (
-    kind === undefined ||
-    unit === undefined ||
-    QUOTA_UNITS[kind] !== unit ||
-    state === undefined ||
-    limit === undefined ||
-    used === undefined ||
-    resetAt === undefined
-  ) {
-    return undefined;
-  }
-
-  return {
-    kind,
-    unit,
-    state,
-    limit,
-    used,
-    remaining: Math.max(limit - used, 0),
-    reset_at: resetAt,
-  } as CailQuotaEvent;
-}
 
 function sanitizeUsage(value: unknown):
   | { kind: "sandbox_compute"; unit: "mib_milliseconds"; quantity: number }
@@ -476,11 +407,6 @@ function sanitizeTerminal(value: unknown):
     return undefined;
   }
   return { outcome: outcome as CailOutcome, reason };
-}
-
-export function jsonLineSink(event: CailLogEvent): void {
-  assertValidatedEvent(event);
-  console.log(JSON.stringify(event));
 }
 
 export type CailWorkersLogEvent = Readonly<
@@ -640,21 +566,6 @@ function buildEvent(
       }
       accepted.add("principal");
     }
-    if (allowed.has("quota") && Object.hasOwn(input, "quota")) {
-      const quota = sanitizeQuota(input["quota"]);
-      if (quota === undefined) {
-        report("event_contract_error");
-        return undefined;
-      }
-      attributes["cail.quota.kind"] = quota.kind;
-      attributes["cail.quota.unit"] = quota.unit;
-      attributes["cail.quota.state"] = quota.state;
-      attributes["cail.quota.limit"] = quota.limit;
-      attributes["cail.quota.used"] = quota.used;
-      attributes["cail.quota.remaining"] = quota.remaining;
-      attributes["cail.quota.reset_at"] = quota.reset_at;
-      accepted.add("quota");
-    }
     if (allowed.has("usage") && Object.hasOwn(input, "usage")) {
       const usage = sanitizeUsage(input["usage"]);
       if (usage === undefined) {
@@ -689,8 +600,6 @@ function buildEvent(
   const principalType = attributes["cail.principal.type"];
   if (
     (outcome === "ok" && attributes["error.type"] !== undefined) ||
-    (attributes["cail.key.id"] !== undefined &&
-      (principalType === undefined || principalType === "anonymous")) ||
     (definition.outcomes !== undefined &&
       (outcome === undefined || !definition.outcomes.includes(outcome))) ||
     (definition.terminal_reasons !== undefined &&

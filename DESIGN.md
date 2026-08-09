@@ -3,8 +3,8 @@
 Status: pre-release schema 2; production activation requires the external
 controls listed below.
 
-This file is the canonical architecture, trust-boundary, security, operations,
-and adoption guide. [README.md](README.md) is the consumer guide. Exported
+This file is the canonical architecture, trust-boundary, security, and
+operations guide. [README.md](README.md) is the consumer guide. Exported
 types and tests are the executable field contract.
 
 ## Contract boundary
@@ -21,7 +21,7 @@ The package owns:
 - field types, runtime validation, trust profiles, and severity mapping;
 - content-free diagnostic codes;
 - logger-produced event provenance for public sinks and projections;
-- Workers Logs, NDJSON, and Analytics Engine adapters; and
+- Workers Logs and Analytics Engine adapters; and
 - W3C trace and CAIL request-correlation helpers.
 
 It does not own authentication, authorization, quota decisions, durable state,
@@ -63,7 +63,7 @@ particular, a custom sink can copy a validated event.
 
 ## Record contract
 
-Portable schema 2 contains:
+The portable record contains:
 
 - `schema_version: 2`;
 - an ISO-8601 UTC timestamp;
@@ -75,12 +75,11 @@ Portable schema 2 contains:
 Trace ID, span ID, and flags appear only as a complete valid group. All-zero
 trace and span IDs are rejected. Attributes are strings, finite numbers, or
 booleans. Nested application objects are accepted only as the typed `principal`,
-`trace`, `terminal`, `quota`, and `usage` inputs and are flattened after full
-validation.
+`trace`, `terminal`, and `usage` inputs and are flattened after full validation.
 
 Platform loggers require `subjectVersion`. Tenant loggers reject it and cannot
-emit product attribution, project identity, principals, cohorts, model facts,
-cost, quota, or settled usage. The tenant profile prevents accidental claims;
+emit product attribution, principals, cohorts, model facts, cost, or settled
+usage. The tenant profile prevents accidental claims;
 it is not an authorization boundary against malicious application code.
 
 Severity uses OpenTelemetry numbers 1, 5, 9, 13, 17, and 21. Static severity is
@@ -119,18 +118,10 @@ subject, or unkeyed digest. This library validates representation and configured
 version, not HMAC provenance. Cohorts are preferred when a per-person view is
 not required.
 
-Credential `key_id` values require a non-anonymous principal and trusted
-authentication-boundary provenance. They are identifiers rather than secret
-material, but remain linkable security data that needs access and retention
-controls.
-
 ## Identity, routing, and state invariants
 
 `service.name` is the constructor-owned emitting component.
 `cail.product.id` is trusted per-event fleet-product attribution.
-`cail.kale.project.name` is a Kale tenant project. Shared gateways and
-collectors must not conflate these scopes or accept tenant claims as fleet
-provenance.
 
 Request, action, call, and usage IDs are lowercase UUID v4 values with separate
 meanings. A request covers one transport request. An action covers one admitted
@@ -151,49 +142,40 @@ rejected promise-like returns become `sink_error` without entering application
 control flow. Asynchronous Worker I/O must be registered synchronously with
 `ExecutionContext.waitUntil()`.
 
-Quota facts are diagnostic snapshots with a closed kind/unit pair. The logger
-derives `remaining = max(limit - used, 0)`. It does not authorize a request or
-charge an account. Sandbox settled usage is exact integer MiB-milliseconds from
-the trusted meter after durable accounting acknowledges the idempotent fact.
-Outbox retries use a service-local event, not the canonical settled event.
+Sandbox settled usage is exact integer MiB-milliseconds from the trusted meter
+after durable accounting acknowledges the idempotent fact. Outbox retries use a
+service-local event, not the canonical settled event.
 
 ## Numeric semantics
 
-Byte, token, micro-USD cost, retry, quota, and usage fields are nonnegative safe
+Byte, token, micro-USD cost, retry, and usage fields are nonnegative safe
 integers. Durations are finite nonnegative milliseconds and may be fractional.
-Omission means unknown; zero means measured zero. Request and response bytes
-are payload-body bytes excluding headers, using transferred compressed size
-when transport compression applies. Token totals include cached input and
-reasoning output when the provider reports those components. Observed model
-cost is diagnostic and never an accounting adjustment.
+Omission means unknown; zero means measured zero. Request bytes are payload-body
+bytes excluding headers. Token totals include cached input and reasoning output
+when the provider reports those components. Observed model cost is diagnostic
+and never an accounting adjustment.
 
 Analytics Engine uses `-1` for missing nonnegative numeric values. Queries must
 exclude that sentinel rather than treating it as zero.
 
 ## Projection contracts
 
-NDJSON carries the nested portable record. Workers Logs carries the same facts
-as one flat object, renaming `schema_version` to `cail.schema.version` and
+Workers Logs carries the same facts as one flat object, renaming
+`schema_version` to `cail.schema.version` and
 `event_name` to `event.name`. Neither projection adds application content.
 
 Analytics Engine dataset `cail_fleet_events_v1` has its own projection schema
 version 1. Blob and double positions are append-only and exported as one-based
 constants. The point index is environment plus trusted product ID, with a
-namespaced service fallback. Stable user pseudonyms, per-event UUIDs, quota
-tuples, credential key identifiers, settled usage, and Kale project identity
-are deliberately omitted. Reserved positions remain empty for append-only
-growth.
-
-Portable schema 2 maps the generic `route` input to `url.template`.
-OpenTelemetry 1.43 defines stable inbound server route semantics as
-`http.route`; changing the emitted key requires a new portable schema and
-coordinated collector fixtures. It is not part of a patch release.
+namespaced service fallback. Stable user pseudonyms, per-event UUIDs, and
+settled usage are deliberately omitted. Reserved positions remain empty for
+future schema growth. The generic `route` input maps to `url.template`.
 
 Analytics Engine is sampled diagnostic storage. Weighted aggregate queries
 must use `_sample_interval` and expose sampling evidence. It cannot prove
 individual delivery, exact action pairing, duplicates, or missing terminals.
 Those facts belong in product-owned durable state. Each event creates one data
-point; producers must stay below the exported 250-points-per-invocation limit.
+point; producers must keep event counts bounded per invocation.
 
 Cloudflare invocation logs are separate from custom console events and can
 contain request URL and response metadata. Deployment configuration must set
@@ -209,28 +191,9 @@ defaults to unsampled unless the caller supplies a recording decision. Valid
 32-member limits enforced.
 
 `X-CAIL-Request-Id` is the only adopted request-ID header and must contain a
-lowercase UUID v4. Malformed values, other UUID versions, uppercase UUIDs, and
-`X-Request-Id` cause a new UUID v4 to be minted. Fleet ingress must normalize to
-the CAIL header before cross-service correlation relies on it.
-
-## Schema 2 adoption and rollback
-
-Schema 2 changes the subject representation and adapter boundary. A platform
-consumer must configure the identity boundary's `subjectVersion`, emit subjects
-with that version, and allow portable `schema_version: 2`. Service-local catalog
-definitions must remove `body`. Directly constructed events must be replaced
-with logger-produced events. There is no database or durable-state migration in
-this repository; existing schema-1 logs remain historical records.
-
-Collectors that can receive records during a mixed rollout must branch on
-`schema_version`. Rollback after schema-2 emission requires either continued
-collector support for both versions or a pause in emission while consumers are
-reverted. Analytics Engine retains projection schema 1 and records portable log
-schema 2 in its existing `log_schema_version` double column.
-
-The package remains below 1.0. Consumers pin a reviewed release exactly and commit
-their resolved lockfile; git-SHA consumers require an explicit pin update.
-Do not publish or deploy from an unverified checkout.
+lowercase UUID v4 or v7. Malformed values, other UUID versions, uppercase
+UUIDs, and unrelated headers cause a new UUID v4 to be minted. Fleet ingress
+must normalize to the CAIL header before cross-service correlation relies on it.
 
 ## External activation requirements
 
@@ -248,27 +211,20 @@ Production activation remains outside this repository and requires:
 No Cloudflare binding, production dataset, secret, domain, OAuth grant, or
 durable production data is changed by this repository's build or test suite.
 
-## Verification and recovery
+## Verification and publication
 
-`bun run verify` performs an isolated source build and compares it with
-committed `dist`, runs all tests, type-checks source and tests, and inspects the
-package contents. CI installs from the frozen Bun lockfile, runs a high-severity
-dependency audit, and runs the same verification on pull requests and pushes to
-`main`. The parity test also injects a stale generated file and proves the check
-fails. The published 0.6.0 source, workflow, registry version, and artifact
-bytes are recorded as historical authority in
-`evidence/package-release-authority-published.json`; that record does not
-authorize a future publish. GitHub Packages publishing is restricted to a
-published GitHub release, resolves lightweight or annotated tags, requires the
-tag commit to equal `GITHUB_SHA` and the live default-branch head, and fails
-closed if the target registry version is occupied or the paginated response is
-incomplete.
+`bun run verify` builds generated `dist`, runs all tests, type-checks source and
+tests, and inspects the package contents. `dist` is generated at build and is
+not committed. CI installs from the frozen Bun lockfile and runs the same
+verification on pull requests and pushes to `main`. GitHub Packages publishing
+is restricted to a stable published release: the workflow checks out the
+release tag, verifies that the tag matches `package.json`, runs the package
+checks, tests, type-check, build, and pack check, and publishes with Bun.
 
-Runtime rollback is a producer and collector deployment operation. Logging is
-non-authoritative, so loss of a diagnostic sink does not roll back application
-state. Operators should alert on content-free diagnostic counts, preserve the
-authoritative durable transition, and reconcile diagnostics from that state
-rather than replaying untrusted log payloads.
+Logging is non-authoritative, so loss of a diagnostic sink does not change
+application state. Operators should alert on content-free diagnostic counts,
+preserve the authoritative durable transition, and reconcile diagnostics from
+that state rather than replaying untrusted log payloads.
 
 The standards baseline is OpenTelemetry semantic conventions `1.43.0`,
 `open-telemetry/semantic-conventions-genai@63f8200eee093730ce845d26ce2aafb621b0807e`,
