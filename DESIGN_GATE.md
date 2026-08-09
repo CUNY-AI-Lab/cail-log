@@ -17,14 +17,16 @@ decisions, delivery guarantees, or release provenance.
   positions for removed observations remain missing sentinels rather than being
   renumbered. The platform's 250-point-per-invocation limit remains a producer
   boundary.
-- Secret-shaped values and the internal `Sensitive` wrapper are rejected before
-  a sink receives an event. Diagnostics contain codes only.
+- Secret-shaped values and the public sensitive-value wrapper (`Sensitive`,
+  `sensitive()`, and `isSensitive()`) are rejected before a sink receives an
+  event. Diagnostics contain codes only.
 
 ## Deferred cuts
 
 The shared schema retains quota snapshots, credential `key_id`, upstream and
-response-byte observations, the JSON-line sink, the `Sensitive` wrapper, and
-the JSON contract fixture. These paths remain because they carry explicit
+response-byte observations, the JSON-line sink, the public sensitive-value
+wrapper (`Sensitive`, `sensitive()`, `isSensitive()`), and the JSON contract
+fixture. These paths remain because they carry explicit
 validation or compatibility boundaries. Release-authority and publication
 controls remain owned by the repository's existing workflow.
 
