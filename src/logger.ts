@@ -27,6 +27,7 @@ import {
   type CailOutcome,
   type CailPlatformLogFieldName,
   type CailSourceClass,
+  type CailTerminalReason,
   type CailTerminalFields,
 } from "./schema.js";
 import {
@@ -35,6 +36,7 @@ import {
 } from "./event-provenance.js";
 import { isSensitive } from "./sensitive.js";
 import { isSecretShaped } from "./secret-shape.js";
+import { TERMINAL_REASONS } from "./terminal-reasons.js";
 
 export type CailLogDiagnosticCode =
   | "clock_error"
@@ -382,17 +384,6 @@ function sanitizePrincipal(value: unknown, subjectVersion: string | undefined):
   return hasSubject ? undefined : { type: principalType };
 }
 
-const TERMINAL_REASONS: Readonly<Record<CailOutcome, readonly string[]>> =
-  Object.freeze({
-    ok: ["completed"],
-    client_error: ["client_error"],
-    error: ["application_failure", "upstream_failure"],
-    denied: ["denied", "quota_blocked", "rate_limited"],
-    cancelled: ["cancelled"],
-    timeout: ["timeout"],
-    outcome_unknown: ["unknown"],
-  });
-
 function sanitizeTerminal(value: unknown):
   | { outcome: CailOutcome; reason: string }
   | undefined {
@@ -402,7 +393,9 @@ function sanitizeTerminal(value: unknown):
   if (
     outcome === undefined ||
     reason === undefined ||
-    !TERMINAL_REASONS[outcome as CailOutcome].includes(reason)
+    !TERMINAL_REASONS[outcome as CailOutcome].includes(
+      reason as CailTerminalReason,
+    )
   ) {
     return undefined;
   }

@@ -1,4 +1,5 @@
 import { isSecretShaped } from "./secret-shape.js";
+import { TERMINAL_REASONS } from "./terminal-reasons.js";
 
 export const CAIL_LOG_SCHEMA_VERSION = 2 as const;
 
@@ -503,28 +504,19 @@ function buildEventCatalog<
       throw new TypeError("cail-log: event terminal reasons are invalid");
     }
 
-    const reasonsByOutcome: Readonly<Record<CailOutcome, readonly CailTerminalReason[]>> = {
-      ok: ["completed"],
-      client_error: ["client_error"],
-      error: ["application_failure", "upstream_failure"],
-      denied: ["denied", "quota_blocked", "rate_limited"],
-      cancelled: ["cancelled"],
-      timeout: ["timeout"],
-      outcome_unknown: ["unknown"],
-    };
     if (
       allowedOutcomes !== undefined &&
       allowedReasons !== undefined &&
       (allowedOutcomes.some(
         (outcome) =>
           !allowedReasons.some((reason) =>
-            reasonsByOutcome[outcome]!.includes(reason),
+            TERMINAL_REASONS[outcome]!.includes(reason),
           ),
       ) ||
         allowedReasons.some(
           (reason) =>
             !allowedOutcomes.some((outcome) =>
-              reasonsByOutcome[outcome]!.includes(reason),
+              TERMINAL_REASONS[outcome]!.includes(reason),
             ),
         ))
     ) {
@@ -542,7 +534,7 @@ function buildEventCatalog<
       ),
     );
     const possibleTerminalOutcomes = possibleOutcomes.filter((outcome) =>
-      reasonsByOutcome[outcome].some((reason) => possibleReasons.has(reason)),
+      TERMINAL_REASONS[outcome].some((reason) => possibleReasons.has(reason)),
     );
     if (
       required.includes("terminal") &&
