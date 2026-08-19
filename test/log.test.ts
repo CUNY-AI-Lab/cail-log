@@ -51,7 +51,12 @@ describe("strict field behavior", () => {
         optional: [],
       },
     });
-    for (const fields of [null, 42, "content", new Date()]) {
+    for (const { fields, label } of [
+      { fields: null, label: "null" },
+      { fields: 42, label: "number" },
+      { fields: "content", label: "string" },
+      { fields: new Date(), label: "date" },
+    ]) {
       const events: CailLogEvent[] = [];
       const diagnostics: string[] = [];
       const logger = createCailLogger({
@@ -66,8 +71,8 @@ describe("strict field behavior", () => {
       // SAFETY: each non-record fixture intentionally bypasses the fields type
       // to exercise the logger's runtime container rejection.
       logger.emit("test.empty", fields as never);
-      expect(events, Object.prototype.toString.call(fields)).toEqual([]);
-      expect(diagnostics, Object.prototype.toString.call(fields)).toEqual([
+      expect(events, label).toEqual([]);
+      expect(diagnostics, label).toEqual([
         "event_contract_error",
       ]);
     }
