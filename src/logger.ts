@@ -15,7 +15,6 @@ import {
   SUBJECT_RE,
   SUBJECT_VERSION_RE,
   isDefinedEventCatalog,
-  isPlainObject,
   type CailEventCatalog,
   type CailEventDefinition,
   type CailLogEnvironment,
@@ -35,8 +34,14 @@ import {
   markValidatedEvent,
 } from "./event-provenance.js";
 import { isSensitive } from "./sensitive.js";
-import { isSecretShaped } from "./secret-shape.js";
+import { containsSecretToken } from "./secret-pattern.js";
 import { TERMINAL_REASONS } from "./terminal-reasons.js";
+import {
+  callableFrom,
+  numberFrom,
+  plainRecordFrom,
+  stringFrom,
+} from "./validation.js";
 
 export type CailLogDiagnosticCode =
   | "clock_error"
@@ -45,10 +50,10 @@ export type CailLogDiagnosticCode =
   | "event_dropped"
   | "sink_error";
 
-export type CailLogSink = (event: CailLogEvent) => unknown;
+export type CailLogSink = (event: CailLogEvent) => void | PromiseLike<void>;
 export type CailLogDiagnosticSink = (
   code: CailLogDiagnosticCode,
-) => unknown;
+) => void | PromiseLike<void>;
 
 type CailLoggerOptionsBase<
   Catalog extends CailEventCatalog,
@@ -187,7 +192,7 @@ export interface CailLogger<
 }
 
 type SanitizedScalar = CailLogAttributeValue;
-type Sanitizer = (value: unknown) => SanitizedScalar | undefined;
+type Sanitizer = <Value>(value: Value) => SanitizedScalar | undefined;
 type FieldDefinition = readonly [output: keyof CailLogAttributes, clean: Sanitizer];
 type MutableCailLogEvent = {
   -readonly [Key in keyof CailLogEvent]: CailLogEvent[Key];
@@ -204,14 +209,6 @@ type CailLoggerOptionsSnapshot = Readonly<{
   clock: unknown;
 }>;
 
-function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
-  return (
-    (typeof value === "object" || typeof value === "function") &&
-    value !== null &&
-    typeof (value as PromiseLike<unknown>).then === "function"
-  );
-}
-
 const ENVIRONMENTS: ReadonlySet<string> = new Set([
   "production",
   "staging",
@@ -221,68 +218,72 @@ const ENVIRONMENTS: ReadonlySet<string> = new Set([
 const SOURCE_CLASSES: ReadonlySet<string> = new Set(["platform", "tenant"]);
 const KNOWN_FIELDS: ReadonlySet<string> = new Set(CAIL_PLATFORM_FIELD_NAMES);
 
-function snapshotLoggerOptions(options: unknown): CailLoggerOptionsSnapshot {
+function snapshotLoggerOptions<Value>(options: Value): CailLoggerOptionsSnapshot {
   try {
-    if (!isPlainObject(options)) {
+    const parsed = plainRecordFrom(options);
+    if (parsed === undefined) {
       throw new TypeError("invalid logger options");
     }
+    const fields = parsed;
     return Object.freeze({
-      service: options["service"],
-      release: options["release"],
-      env: options["env"],
-      sourceClass: options["sourceClass"],
-      subjectVersion: options["subjectVersion"],
-      catalog: options["catalog"],
-      sink: options["sink"],
-      onDiagnostic: options["onDiagnostic"],
-      clock: options["clock"],
+      service: fields.read("service"),
+      release: fields.read("release"),
+      env: fields.read("env"),
+      sourceClass: fields.read("sourceClass"),
+      subjectVersion: fields.read("subjectVersion"),
+      catalog: fields.read("catalog"),
+      sink: fields.read("sink"),
+      onDiagnostic: fields.read("onDiagnostic"),
+      clock: fields.read("clock"),
     });
   } catch {
     throw new TypeError("cail-log: options must be a readable plain object");
   }
 }
 
-function sanitizePattern(value: unknown, pattern: RegExp): string | undefined {
-  if (typeof value !== "string" || isSensitive(value)) return undefined;
-  if (isSecretShaped(value)) return undefined;
-  return pattern.test(value) ? value : undefined;
+function sanitizePattern<Value>(value: Value, pattern: RegExp): string | undefined {
+  const text = stringFrom(value);
+  if (text === undefined || isSensitive(value)) return undefined;
+  if (containsSecretToken(text)) return undefined;
+  return pattern.test(text) ? text : undefined;
 }
 
-function sanitizeEnum(
-  value: unknown,
+function sanitizeEnum<Value>(
+  value: Value,
   allowed: readonly string[],
 ): string | undefined {
-  return typeof value === "string" && allowed.includes(value)
-    ? value
+  const text = stringFrom(value);
+  return text !== undefined && allowed.includes(text) ? text : undefined;
+}
+
+function sanitizeDuration<Value>(value: Value): number | undefined {
+  const number = numberFrom(value);
+  return number !== undefined && Number.isFinite(number) && number >= 0
+    ? number
     : undefined;
 }
 
-function sanitizeDuration(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0
-    ? value
+function sanitizeCounter<Value>(value: Value): number | undefined {
+  const number = numberFrom(value);
+  return number !== undefined && Number.isSafeInteger(number) && number >= 0
+    ? number
     : undefined;
 }
 
-function sanitizeCounter(value: unknown): number | undefined {
-  return typeof value === "number" &&
-    Number.isSafeInteger(value) &&
-    value >= 0
-    ? value
+function sanitizeStatus<Value>(value: Value): number | undefined {
+  const number = numberFrom(value);
+  return number !== undefined &&
+    Number.isInteger(number) &&
+    number >= 100 &&
+    number <= 599
+    ? number
     : undefined;
 }
 
-function sanitizeStatus(value: unknown): number | undefined {
-  return typeof value === "number" &&
-    Number.isInteger(value) &&
-    value >= 100 &&
-    value <= 599
-    ? value
-    : undefined;
-}
-
-function sanitizeRouteTemplate(value: unknown): string | undefined {
-  if (typeof value !== "string" || value.length > 160) return undefined;
-  return sanitizePattern(value, ROUTE_TEMPLATE_RE);
+function sanitizeRouteTemplate<Value>(value: Value): string | undefined {
+  const route = stringFrom(value);
+  if (route === undefined || route.length > 160) return undefined;
+  return sanitizePattern(route, ROUTE_TEMPLATE_RE);
 }
 
 const EVENT_ID_RE =
@@ -313,17 +314,19 @@ const PLATFORM_FIELD_DEFS: Readonly<Record<string, FieldDefinition>> = Object.fr
   cost_micro_usd: ["cail.gen_ai.cost.micro_usd", sanitizeCounter],
 });
 
-function sanitizeUsage(value: unknown):
+function sanitizeUsage<Value>(value: Value):
   | { kind: "sandbox_compute"; unit: "mib_milliseconds"; quantity: number }
   | undefined {
-  if (!isPlainObject(value)) return undefined;
+  const parsed = plainRecordFrom(value);
+  if (parsed === undefined) return undefined;
+  const fields = parsed;
   if (
-    value["kind"] !== "sandbox_compute" ||
-    value["unit"] !== "mib_milliseconds"
+    fields.read("kind") !== "sandbox_compute" ||
+    fields.read("unit") !== "mib_milliseconds"
   ) {
     return undefined;
   }
-  const quantity = sanitizeCounter(value["quantity"]);
+  const quantity = sanitizeCounter(fields.read("quantity"));
   if (quantity === undefined) return undefined;
   return {
     kind: "sandbox_compute",
@@ -332,13 +335,15 @@ function sanitizeUsage(value: unknown):
   };
 }
 
-function sanitizeTrace(value: unknown):
+function sanitizeTrace<Value>(value: Value):
   | { trace_id: string; span_id: string; trace_flags: 0 | 1 }
   | undefined {
-  if (!isPlainObject(value)) return undefined;
-  const traceId = sanitizePattern(value["trace_id"], HEX_TRACE_RE);
-  const spanId = sanitizePattern(value["span_id"], HEX_SPAN_RE);
-  const traceFlags = value["trace_flags"];
+  const parsed = plainRecordFrom(value);
+  if (parsed === undefined) return undefined;
+  const fields = parsed;
+  const traceId = sanitizePattern(fields.read("trace_id"), HEX_TRACE_RE);
+  const spanId = sanitizePattern(fields.read("span_id"), HEX_SPAN_RE);
+  const traceFlags = numberFrom(fields.read("trace_flags"));
   if (
     traceId === undefined ||
     traceId === "0".repeat(32) ||
@@ -351,11 +356,13 @@ function sanitizeTrace(value: unknown):
   return { trace_id: traceId, span_id: spanId, trace_flags: traceFlags };
 }
 
-function sanitizePrincipal(value: unknown, subjectVersion: string | undefined):
+function sanitizePrincipal<Value>(value: Value, subjectVersion: string | undefined):
   | { type: "user" | "app" | "service" | "canary" | "anonymous"; subject?: string }
   | undefined {
-  if (!isPlainObject(value)) return undefined;
-  const type = sanitizeEnum(value["type"], [
+  const parsed = plainRecordFrom(value);
+  if (parsed === undefined) return undefined;
+  const fields = parsed;
+  const type = sanitizeEnum(fields.read("type"), [
     "user",
     "app",
     "service",
@@ -363,14 +370,15 @@ function sanitizePrincipal(value: unknown, subjectVersion: string | undefined):
     "anonymous",
   ]);
   if (type === undefined) return undefined;
+  // SAFETY: sanitizeEnum accepted only the five values in the closed list.
   const principalType = type as
     | "user"
     | "app"
     | "service"
     | "canary"
     | "anonymous";
-  const subjectValue = Object.hasOwn(value, "subject")
-    ? value["subject"]
+  const subjectValue = fields.has("subject")
+    ? fields.read("subject")
     : undefined;
   const hasSubject = subjectValue !== undefined;
   if (principalType === "user" || principalType === "canary") {
@@ -384,21 +392,28 @@ function sanitizePrincipal(value: unknown, subjectVersion: string | undefined):
   return hasSubject ? undefined : { type: principalType };
 }
 
-function sanitizeTerminal(value: unknown):
+function sanitizeTerminal<Value>(value: Value):
   | { outcome: CailOutcome; reason: string }
   | undefined {
-  if (!isPlainObject(value)) return undefined;
-  const outcome = sanitizeEnum(value["outcome"], Object.keys(TERMINAL_REASONS));
-  const reason = typeof value["reason"] === "string" ? value["reason"] : undefined;
+  const parsed = plainRecordFrom(value);
+  if (parsed === undefined) return undefined;
+  const outcome = sanitizeEnum(
+    parsed.read("outcome"),
+    Object.keys(TERMINAL_REASONS),
+  );
+  const reason = stringFrom(parsed.read("reason"));
   if (
     outcome === undefined ||
     reason === undefined ||
+    // SAFETY: sanitizeEnum accepted only keys owned by TERMINAL_REASONS.
     !TERMINAL_REASONS[outcome as CailOutcome].includes(
+      // SAFETY: includes performs the final closed reason check.
       reason as CailTerminalReason,
     )
   ) {
     return undefined;
   }
+  // SAFETY: the map lookup and includes check established the closed pair.
   return { outcome: outcome as CailOutcome, reason };
 }
 
@@ -408,24 +423,27 @@ export type CailWorkersLogEvent = Readonly<
 
 export function toWorkersLogEvent(event: CailLogEvent): CailWorkersLogEvent {
   assertValidatedEvent(event);
-  const output: Record<string, CailLogAttributeValue> = {
-    ...event.attributes,
-    "service.namespace": event.resource["service.namespace"],
-    "service.name": event.resource["service.name"],
-    "service.version": event.resource["service.version"],
-    "deployment.environment.name":
-      event.resource["deployment.environment.name"],
-    "cail.schema.version": event.schema_version,
-    timestamp: event.timestamp,
-    severity_text: event.severity_text,
-    severity_number: event.severity_number,
-    "event.name": event.event_name,
-    body: event.body,
-  };
-  if (event.trace_id !== undefined) output.trace_id = event.trace_id;
-  if (event.span_id !== undefined) output.span_id = event.span_id;
-  if (event.trace_flags !== undefined) output.trace_flags = event.trace_flags;
-  return Object.freeze(output);
+  const output = new Map<string, CailLogAttributeValue>(
+    Object.entries(event.attributes),
+  );
+  output.set("service.namespace", event.resource["service.namespace"]);
+  output.set("service.name", event.resource["service.name"]);
+  output.set("service.version", event.resource["service.version"]);
+  output.set(
+    "deployment.environment.name",
+    event.resource["deployment.environment.name"],
+  );
+  output.set("cail.schema.version", event.schema_version);
+  output.set("timestamp", event.timestamp);
+  output.set("severity_text", event.severity_text);
+  output.set("severity_number", event.severity_number);
+  output.set("event.name", event.event_name);
+  output.set("body", event.body);
+  if (event.trace_id !== undefined) output.set("trace_id", event.trace_id);
+  if (event.span_id !== undefined) output.set("span_id", event.span_id);
+  if (event.trace_flags !== undefined)
+    output.set("trace_flags", event.trace_flags);
+  return Object.freeze(Object.fromEntries(output));
 }
 
 export function workersStructuredSink(event: CailLogEvent): void {
@@ -445,17 +463,19 @@ interface LoggerContext {
   resource: CailLogEvent["resource"];
 }
 
-function buildEvent(
-  eventName: unknown,
-  fields: unknown,
+function buildEvent<EventName, Fields>(
+  eventName: EventName,
+  fields: Fields,
   timestamp: string,
   context: LoggerContext,
   catalog: CailEventCatalog,
   report: (code: CailLogDiagnosticCode) => void,
 ): CailLogEvent | undefined {
-  const knownEvent =
-    typeof eventName === "string" && Object.hasOwn(catalog, eventName);
-  if (!knownEvent) {
+  const eventNameString = stringFrom(eventName);
+  if (
+    eventNameString === undefined ||
+    !Object.hasOwn(catalog, eventNameString)
+  ) {
     report("event_invalid");
     return Object.freeze({
       schema_version: CAIL_LOG_SCHEMA_VERSION,
@@ -471,7 +491,7 @@ function buildEvent(
     });
   }
 
-  const definition = catalog[eventName as string]!;
+  const definition = catalog[eventNameString]!;
   if (
     definition.source !== "both" &&
     definition.source !== context.sourceClass
@@ -480,51 +500,48 @@ function buildEvent(
     return undefined;
   }
 
-  let rawInput: Record<string, unknown>;
-  if (fields === undefined) {
-    rawInput = {};
-  } else if (isPlainObject(fields)) {
-    rawInput = fields;
-  } else {
+  const parsedFields = plainRecordFrom(fields === undefined ? {} : fields);
+  if (parsedFields === undefined) {
     report("event_contract_error");
     return undefined;
   }
+  const rawInput = parsedFields;
   const allowed = new Set<string>([
     ...definition.required,
     ...definition.optional,
   ]);
-  const input = Object.create(null) as Record<string, unknown>;
+  const input = new Map<string, unknown>();
   for (const key of KNOWN_FIELDS) {
-    if (!Object.hasOwn(rawInput, key)) continue;
-    const value = rawInput[key];
+    if (!rawInput.has(key)) continue;
+    const value = rawInput.read(key);
     if (value === undefined) continue;
     if (!allowed.has(key)) {
       report("event_contract_error");
       return undefined;
     }
-    input[key] = value;
+    input.set(key, value);
   }
 
-  const attributes: Record<string, CailLogAttributeValue> = {
-    "cail.source.class": context.sourceClass,
-  };
+  const attributes = new Map<keyof CailLogAttributes, CailLogAttributeValue>([
+    ["cail.source.class", context.sourceClass],
+  ]);
   const accepted = new Set<string>();
   for (const [key, [attribute, sanitizer]] of Object.entries(COMMON_FIELD_DEFS)) {
-    if (!allowed.has(key) || !Object.hasOwn(input, key)) continue;
-    const clean = sanitizer(input[key]);
+    if (!allowed.has(key) || !input.has(key)) continue;
+    const clean = sanitizer(input.get(key));
     if (clean === undefined) {
       report("event_contract_error");
       return undefined;
     }
-    attributes[attribute] = clean;
+    attributes.set(attribute, clean);
     accepted.add(key);
   }
 
   let traceId: string | undefined;
   let spanId: string | undefined;
   let traceFlags: 0 | 1 | undefined;
-  if (allowed.has("trace") && Object.hasOwn(input, "trace")) {
-    const trace = sanitizeTrace(input["trace"]);
+  if (allowed.has("trace") && input.has("trace")) {
+    const trace = sanitizeTrace(input.get("trace"));
     if (trace === undefined) {
       report("event_contract_error");
       return undefined;
@@ -535,51 +552,57 @@ function buildEvent(
 
   if (context.sourceClass === "platform") {
     for (const [key, [attribute, sanitizer]] of Object.entries(PLATFORM_FIELD_DEFS)) {
-      if (!allowed.has(key) || !Object.hasOwn(input, key)) continue;
-      const clean = sanitizer(input[key]);
+      if (!allowed.has(key) || !input.has(key)) continue;
+      const clean = sanitizer(input.get(key));
       if (clean === undefined) {
         report("event_contract_error");
         return undefined;
       }
-      attributes[attribute] = clean;
+      attributes.set(attribute, clean);
       accepted.add(key);
     }
-    if (allowed.has("principal") && Object.hasOwn(input, "principal")) {
+    if (allowed.has("principal") && input.has("principal")) {
       const principal = sanitizePrincipal(
-        input["principal"],
+        input.get("principal"),
         context.subjectVersion,
       );
       if (principal === undefined) {
         report("event_contract_error");
         return undefined;
       }
-      attributes["cail.principal.type"] = principal.type;
+      attributes.set("cail.principal.type", principal.type);
       if (principal.subject !== undefined) {
-        attributes["enduser.pseudo.id"] = principal.subject;
+        attributes.set("enduser.pseudo.id", principal.subject);
       }
       accepted.add("principal");
     }
-    if (allowed.has("usage") && Object.hasOwn(input, "usage")) {
-      const usage = sanitizeUsage(input["usage"]);
+    if (allowed.has("usage") && input.has("usage")) {
+      const usage = sanitizeUsage(input.get("usage"));
       if (usage === undefined) {
         report("event_contract_error");
         return undefined;
       }
-      attributes["cail.usage.kind"] = usage.kind;
-      attributes["cail.usage.unit"] = usage.unit;
-      attributes["cail.usage.quantity"] = usage.quantity;
+      attributes.set("cail.usage.kind", usage.kind);
+      attributes.set("cail.usage.unit", usage.unit);
+      attributes.set("cail.usage.quantity", usage.quantity);
       accepted.add("usage");
     }
   }
 
-  if (allowed.has("terminal") && Object.hasOwn(input, "terminal")) {
-    const terminal = sanitizeTerminal(input["terminal"]);
+  let terminalOutcome: CailOutcome | undefined;
+  let terminalReason: CailTerminalReason | undefined;
+  if (allowed.has("terminal") && input.has("terminal")) {
+    const terminal = sanitizeTerminal(input.get("terminal"));
     if (terminal === undefined) {
       report("event_contract_error");
       return undefined;
     }
-    attributes["cail.outcome"] = terminal.outcome;
-    attributes["cail.outcome.reason"] = terminal.reason;
+    terminalOutcome = terminal.outcome;
+    // SAFETY: sanitizeTerminal accepts only a reason from the closed terminal
+    // reason map before returning it.
+    terminalReason = terminal.reason as CailTerminalReason;
+    attributes.set("cail.outcome", terminalOutcome);
+    attributes.set("cail.outcome.reason", terminalReason);
     accepted.add("terminal");
   }
 
@@ -588,16 +611,14 @@ function buildEvent(
     return undefined;
   }
 
-  const outcome = attributes["cail.outcome"] as CailOutcome | undefined;
-  const terminalReason = attributes["cail.outcome.reason"];
-  const principalType = attributes["cail.principal.type"];
+  const outcome = terminalOutcome;
   if (
-    (outcome === "ok" && attributes["error.type"] !== undefined) ||
+    (outcome === "ok" && attributes.has("error.type")) ||
     (definition.outcomes !== undefined &&
       (outcome === undefined || !definition.outcomes.includes(outcome))) ||
     (definition.terminal_reasons !== undefined &&
       (terminalReason === undefined ||
-        !definition.terminal_reasons.includes(terminalReason as never)))
+        !definition.terminal_reasons.includes(terminalReason)))
   ) {
     report("event_contract_error");
     return undefined;
@@ -611,15 +632,19 @@ function buildEvent(
         : "error"
     : definition.severity;
 
+  const rawAttributes = Object.fromEntries(attributes);
+  // SAFETY: every key is owned by CailLogAttributes and every value passed its
+  // field-specific sanitizer before insertion.
+  const eventAttributes = Object.freeze(rawAttributes) as CailLogAttributes;
   const output: MutableCailLogEvent = {
     schema_version: CAIL_LOG_SCHEMA_VERSION,
     timestamp,
     severity_text: level.toUpperCase(),
     severity_number: CAIL_SEVERITY_NUMBER[level],
-    event_name: eventName as string,
+    event_name: eventNameString,
     body: definition.body,
     resource: context.resource,
-    attributes: attributes as unknown as CailLogAttributes,
+    attributes: eventAttributes,
   };
   if (traceId !== undefined && spanId !== undefined && traceFlags !== undefined) {
     output.trace_id = traceId;
@@ -630,7 +655,7 @@ function buildEvent(
   return Object.freeze({
     ...output,
     resource: Object.freeze({ ...output.resource }),
-    attributes: Object.freeze({ ...attributes }) as unknown as CailLogAttributes,
+    attributes: eventAttributes,
   });
 }
 
@@ -650,22 +675,26 @@ export function createCailLogger<
   if (release === undefined) {
     throw new TypeError("cail-log: release must be a machine identifier");
   }
+  const configuredEnvironment = stringFrom(configured.env);
   if (
-    typeof configured.env !== "string" ||
-    !ENVIRONMENTS.has(configured.env)
+    configuredEnvironment === undefined ||
+    !ENVIRONMENTS.has(configuredEnvironment)
   ) {
     throw new TypeError(
       "cail-log: env must be production, staging, development, or test",
     );
   }
+  const configuredSourceClass = stringFrom(configured.sourceClass);
   if (
-    typeof configured.sourceClass !== "string" ||
-    !SOURCE_CLASSES.has(configured.sourceClass)
+    configuredSourceClass === undefined ||
+    !SOURCE_CLASSES.has(configuredSourceClass)
   ) {
     throw new TypeError("cail-log: sourceClass must be platform or tenant");
   }
-  const env = configured.env as CailLogEnvironment;
-  const sourceClass = configured.sourceClass as CailSourceClass;
+  // SAFETY: membership in the closed environment set was established above.
+  const env = configuredEnvironment as CailLogEnvironment;
+  // SAFETY: membership in the closed source-class set was established above.
+  const sourceClass = configuredSourceClass as CailSourceClass;
   const subjectVersion = sanitizePattern(
     configured.subjectVersion,
     SUBJECT_VERSION_RE,
@@ -683,15 +712,18 @@ export function createCailLogger<
       "cail-log: tenant loggers must not configure a subjectVersion",
     );
   }
-  if (typeof configured.sink !== "function") {
+  if (callableFrom(configured.sink) === undefined) {
     throw new TypeError("cail-log: sink must be an explicit function");
   }
-  if (configured.clock !== undefined && typeof configured.clock !== "function") {
+  if (
+    configured.clock !== undefined &&
+    callableFrom(configured.clock) === undefined
+  ) {
     throw new TypeError("cail-log: clock must be a function");
   }
   if (
     configured.onDiagnostic !== undefined &&
-    typeof configured.onDiagnostic !== "function"
+    callableFrom(configured.onDiagnostic) === undefined
   ) {
     throw new TypeError("cail-log: onDiagnostic must be a function");
   }
@@ -701,9 +733,17 @@ export function createCailLogger<
       "cail-log: catalog must come from defineEventCatalog, extendCailEventCatalog, or CAIL_EVENT_CATALOG",
     );
   }
+  // SAFETY: isDefinedEventCatalog established provenance and the generic
+  // options contract preserves the caller's exact catalog type.
   const catalog = configured.catalog as Catalog;
+  // SAFETY: callableFrom established a callable value and the options contract
+  // supplies its event signature.
   const sink = configured.sink as CailLogSink;
+  // SAFETY: callableFrom established the optional clock's callability; the
+  // options contract owns its zero-argument numeric result.
   const clock = (configured.clock as (() => number) | undefined) ?? Date.now;
+  // SAFETY: callableFrom established the optional diagnostic sink's
+  // callability; the options contract owns its diagnostic signature.
   const onDiagnostic = configured.onDiagnostic as
     | CailLogDiagnosticSink
     | undefined;
@@ -729,8 +769,8 @@ export function createCailLogger<
   function report(code: CailLogDiagnosticCode): void {
     if (onDiagnostic !== undefined) {
       try {
-        const result = onDiagnostic(code) as unknown;
-        if (isPromiseLike(result)) {
+        const result = onDiagnostic(code);
+        if (result !== undefined) {
           Promise.resolve(result).catch(reportFallbackDiagnostic);
         }
         return;
@@ -784,8 +824,8 @@ export function createCailLogger<
     markValidatedEvent(logEvent);
 
     try {
-      const result = sink(logEvent) as unknown;
-      if (isPromiseLike(result)) {
+      const result = sink(logEvent);
+      if (result !== undefined) {
         Promise.resolve(result).catch(() => report("sink_error"));
       }
     } catch {
@@ -793,6 +833,8 @@ export function createCailLogger<
     }
   }
 
+  // SAFETY: emit is closed over the exact Catalog and Source supplied to this
+  // constructor; the public mapped signature narrows those same event keys.
   return {
     emit,
   } as CailLogger<Catalog, Source>;

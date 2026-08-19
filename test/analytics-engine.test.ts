@@ -83,9 +83,11 @@ describe("Analytics Engine projection", () => {
 
   it("writes one point through an explicit dataset sink", () => {
     const points: CailAnalyticsEngineDataPoint[] = [];
-    createAnalyticsEngineSink({ writeDataPoint: (point) => points.push(point) })(
-      terminalEvent(),
-    );
+    createAnalyticsEngineSink({
+      writeDataPoint: (point) => {
+        points.push(point);
+      },
+    })(terminalEvent());
     expect(points).toHaveLength(1);
     expect(points[0]!.indexes).toEqual(["production:agent-studio"]);
   });
@@ -103,7 +105,7 @@ describe("Analytics Engine projection", () => {
       sink: fanoutSinks(
         () => Promise.reject(new Error("secret user content")),
         createAnalyticsEngineSink({
-          writeDataPoint: (point) => points.push(point),
+          writeDataPoint: (point) => { points.push(point); },
         }),
       ),
       onDiagnostic: (code) => { diagnostics.push(code); },
@@ -138,8 +140,27 @@ describe("Analytics Engine projection", () => {
   });
 
   it("rejects missing datasets and empty fanout configuration", () => {
+    // SAFETY: the missing method is intentional invalid input for the runtime
+    // dataset guard; the assertion bypasses only the compile-time interface.
     expect(() => createAnalyticsEngineSink({} as never)).toThrow(TypeError);
     expect(() => fanoutSinks()).toThrow(TypeError);
+  });
+
+  it("accepts platform capability objects with a custom prototype", () => {
+    class PlatformDataset {
+      readonly points: CailAnalyticsEngineDataPoint[] = [];
+
+      writeDataPoint(point: CailAnalyticsEngineDataPoint): void {
+        this.points.push(point);
+      }
+    }
+
+    const dataset = new PlatformDataset();
+    const event = terminalEvent();
+    createAnalyticsEngineSink(dataset)(event);
+
+    expect(dataset.points).toHaveLength(1);
+    expect(dataset.points[0]?.blobs[0]).toBe(event.event_name);
   });
 
   it("isolates production and staging sampling indexes", () => {

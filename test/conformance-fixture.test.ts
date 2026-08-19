@@ -8,10 +8,11 @@ import {
   createCailLogger,
   isOperationalLogSubject,
   outboundCorrelationHeaders,
-  type CailLogEnvironment,
   type CailLogEvent,
 } from "../src/index.js";
 
+// SAFETY: this repository-owned, versioned conformance fixture is immutable;
+// every projected field is compared with a freshly emitted event below.
 const fixture = JSON.parse(
   readFileSync(
     new URL("../contract/operational-event-v2.json", import.meta.url),
@@ -47,16 +48,16 @@ describe("operational-event-v2 fixture", () => {
     const logger = createCailLogger({
       service: fixture.event.resource["service.name"],
       release: fixture.event.resource["service.version"],
-      env: fixture.event.resource[
-        "deployment.environment.name"
-      ] as CailLogEnvironment,
+      env: fixture.event.resource["deployment.environment.name"],
       sourceClass: "platform",
       subjectVersion: "v1",
       catalog: CAIL_EVENT_CATALOG,
-      sink: (event) => events.push(event),
-      onDiagnostic: (code) => diagnostics.push(code),
+      sink: (event) => { events.push(event); },
+      onDiagnostic: (code) => { diagnostics.push(code); },
       clock: () => Date.parse(fixture.event.timestamp),
     });
+    // SAFETY: the canonical fixture's exact action and product attributes are
+    // asserted against the newly emitted event at the end of this test.
     logger.emit(CAIL_EVENTS.ACTION_ADMITTED, {
       action_id: fixture.event.attributes["cail.action.id"] as string,
       product_id: fixture.event.attributes["cail.product.id"] as string,

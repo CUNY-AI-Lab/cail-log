@@ -1,5 +1,8 @@
-import { isSecretShaped } from "./secret-shape.js";
+import * as z from "zod/mini";
+
+import { containsSecretToken } from "./secret-pattern.js";
 import { TERMINAL_REASONS } from "./terminal-reasons.js";
+import { plainRecordFrom, stringFrom } from "./validation.js";
 
 export const CAIL_LOG_SCHEMA_VERSION = 2 as const;
 
@@ -273,6 +276,22 @@ type CailServiceEventCatalog<
   [Event in keyof Catalog]: CailServiceEventDefinition<Catalog[Event]>;
 }>;
 
+type BodylessCatalog<
+  Catalog extends Record<string, CailCustomEventDefinition>,
+> = Extract<Catalog[keyof Catalog], Readonly<{ body: unknown }>> extends never
+  ? Catalog
+  : never;
+
+interface MutableValidatedEventDefinition {
+  body: string;
+  source: CailEventSource;
+  severity: CailEventSeverity;
+  required: readonly string[];
+  optional: readonly string[];
+  outcomes?: readonly CailOutcome[];
+  terminal_reasons?: readonly CailTerminalReason[];
+}
+
 export type CailEventCatalog = Readonly<
   Record<string, CailEventDefinition>
 >;
@@ -355,24 +374,81 @@ export const HTTP_METHODS: readonly CailHttpMethod[] = Object.freeze([
 ]);
 
 /** True only for the versioned pseudonym allowed in operational events. */
-export function isOperationalLogSubject(value: unknown): value is string {
-  return typeof value === "string" && SUBJECT_RE.test(value);
+export function isOperationalLogSubject<Value>(
+  value: Value,
+): value is Value & string {
+  const subject = stringFrom(value);
+  return subject !== undefined && SUBJECT_RE.test(subject);
 }
 
-const CONTROL_RE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 const MAX_CATALOG_MESSAGE = 160;
 const VALIDATED_EVENT_CATALOGS = new WeakSet<object>();
 
-export function isPlainObject(
-  value: unknown,
-): value is Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return false;
-  }
-
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
+function hasControlCharacter(value: string): boolean {
+  return Array.from(value).some((character) => {
+    const code = character.charCodeAt(0);
+    return (
+      code <= 0x1f ||
+      (code >= 0x7f && code <= 0x9f) ||
+      code === 0x2028 ||
+      code === 0x2029
+    );
+  });
 }
+
+const EVENT_SOURCE_SCHEMA = z.enum(["platform", "tenant", "both"]);
+const EVENT_SEVERITY_SCHEMA = z.enum([
+  "fatal",
+  "error",
+  "warn",
+  "info",
+  "debug",
+  "trace",
+  "outcome",
+]);
+const OUTCOME_SCHEMA = z.enum([
+  "ok",
+  "client_error",
+  "error",
+  "denied",
+  "cancelled",
+  "timeout",
+  "outcome_unknown",
+]);
+const TERMINAL_REASON_SCHEMA = z.enum([
+  "application_failure",
+  "cancelled",
+  "client_error",
+  "completed",
+  "denied",
+  "quota_blocked",
+  "rate_limited",
+  "timeout",
+  "unknown",
+  "upstream_failure",
+]);
+const EVENT_DEFINITION_SCHEMA = z.strictObject({
+  body: z.string(),
+  source: EVENT_SOURCE_SCHEMA,
+  severity: EVENT_SEVERITY_SCHEMA,
+  required: z.array(z.string()),
+  optional: z.array(z.string()),
+  outcomes: z.optional(z.array(OUTCOME_SCHEMA)),
+  terminal_reasons: z.optional(z.array(TERMINAL_REASON_SCHEMA)),
+});
+const EVENT_CATALOG_SCHEMA = z.record(z.string(), EVENT_DEFINITION_SCHEMA);
+const CUSTOM_EVENT_DEFINITION_SCHEMA = z.strictObject({
+  source: EVENT_SOURCE_SCHEMA,
+  severity: EVENT_SEVERITY_SCHEMA,
+  required: z.array(z.string()),
+  optional: z.array(z.string()),
+  outcomes: z.optional(z.array(OUTCOME_SCHEMA)),
+  terminal_reasons: z.optional(z.array(TERMINAL_REASON_SCHEMA)),
+});
+const CUSTOM_EVENT_CATALOG_SCHEMA = z.record(
+  z.string(),
+  CUSTOM_EVENT_DEFINITION_SCHEMA,
+);
 
 function buildEventCatalog<
   const Catalog extends Record<string, CailEventDefinition>,
@@ -380,11 +456,16 @@ function buildEventCatalog<
   catalog: Catalog,
   allowReservedCailNamespace: boolean,
 ): Readonly<Catalog> {
-  if (!isPlainObject(catalog)) {
+  if (plainRecordFrom(catalog) === undefined) {
     throw new TypeError("cail-log: event catalog must be an object");
   }
 
-  const copy = Object.create(null) as Record<string, CailEventDefinition>;
+  const parsedCatalog = EVENT_CATALOG_SCHEMA.safeParse(catalog);
+  if (!parsedCatalog.success) {
+    throw new TypeError("cail-log: every event definition must be valid");
+  }
+
+  const copy: Record<string, CailEventDefinition> = Object.create(null);
   const tenantFields = new Set<string>(CAIL_TENANT_FIELD_NAMES);
   const platformFields = new Set<string>(CAIL_PLATFORM_FIELD_NAMES);
   const outcomes = new Set<string>([
@@ -419,28 +500,23 @@ function buildEventCatalog<
     "outcome",
   ]);
 
-  for (const event of Object.keys(catalog)) {
+  for (const [event, definition] of Object.entries(parsedCatalog.data)) {
     if (
       event === CAIL_EVENT_INVALID ||
       (!allowReservedCailNamespace && event.startsWith("cail.")) ||
-      isSecretShaped(event) ||
+      containsSecretToken(event) ||
       !SLUG_RE.test(event)
     ) {
       throw new TypeError(
         "cail-log: every catalog event must be a non-reserved event slug",
       );
     }
-    const definition = catalog[event];
-    if (!isPlainObject(definition)) {
-      throw new TypeError("cail-log: every event definition must be an object");
-    }
     const message = definition.body;
     if (
-      typeof message !== "string" ||
       message === "" ||
       message !== message.trim() ||
       message.length > MAX_CATALOG_MESSAGE ||
-      CONTROL_RE.test(message)
+      hasControlCharacter(message)
     ) {
       throw new TypeError(
         "cail-log: every catalog message must be a single static line of 1-160 characters",
@@ -465,7 +541,7 @@ function buildEventCatalog<
     const combined = [...required, ...optional];
     if (
       combined.some(
-        (field) => typeof field !== "string" || !allowedFields.has(field),
+        (field) => !allowedFields.has(field),
       ) ||
       new Set(combined).size !== combined.length
     ) {
@@ -546,7 +622,7 @@ function buildEventCatalog<
       );
     }
 
-    const frozen: CailEventDefinition = {
+    const validated: MutableValidatedEventDefinition = {
       body: message,
       source: definition.source,
       severity: definition.severity,
@@ -554,18 +630,21 @@ function buildEventCatalog<
       optional: Object.freeze(optional),
     };
     if (allowedOutcomes !== undefined) {
-      (frozen as { outcomes?: readonly CailOutcome[] }).outcomes =
-        Object.freeze(allowedOutcomes);
+      validated.outcomes = Object.freeze(allowedOutcomes);
     }
     if (allowedReasons !== undefined) {
-      (frozen as { terminal_reasons?: readonly CailTerminalReason[] })
-        .terminal_reasons = Object.freeze(allowedReasons);
+      validated.terminal_reasons = Object.freeze(allowedReasons);
     }
+    // SAFETY: source-specific fields, outcomes, and reasons were checked above
+    // against the complete closed CAIL definition contract.
+    const frozen = Object.freeze(validated) as CailEventDefinition;
     copy[event] = Object.freeze(frozen);
   }
   if (Object.keys(copy).length === 0) {
     throw new TypeError("cail-log: event catalog must not be empty");
   }
+  // SAFETY: every entry was decoded and validated before insertion, and the
+  // output preserves the caller's catalog keys while narrowing their values.
   const frozenCatalog = Object.freeze(copy) as Readonly<Catalog>;
   VALIDATED_EVENT_CATALOGS.add(frozenCatalog);
   return frozenCatalog;
@@ -574,43 +653,39 @@ function buildEventCatalog<
 export function defineEventCatalog<
   const Catalog extends Record<string, CailCustomEventDefinition>,
 >(
-  catalog: Catalog & {
-    readonly [Event in keyof Catalog]: Readonly<{ body?: never }>;
-  },
+  catalog: BodylessCatalog<Catalog>,
 ): CailServiceEventCatalog<Catalog> {
-  if (!isPlainObject(catalog)) {
+  if (plainRecordFrom(catalog) === undefined) {
     throw new TypeError("cail-log: event catalog must be an object");
   }
-  const withBodies = Object.create(null) as Record<
-    string,
-    CailEventDefinition
-  >;
-  for (const [event, value] of Object.entries(catalog)) {
-    if (
-      !isPlainObject(value) ||
-      (Object.hasOwn(value, "body") && value["body"] !== undefined)
-    ) {
-      throw new TypeError(
-        "cail-log: service event bodies are fixed by the library",
-      );
-    }
+
+  const parsedCatalog = CUSTOM_EVENT_CATALOG_SCHEMA.safeParse(catalog);
+  if (!parsedCatalog.success) {
+    throw new TypeError("cail-log: every service event definition must be valid");
+  }
+  const withBodies: Record<string, CailEventDefinition> = Object.create(null);
+  for (const [event, value] of Object.entries(parsedCatalog.data)) {
+    // SAFETY: the custom definition schema established the closed source,
+    // severity, field, outcome, and reason representations; the canonical body
+    // completes the full definition before semantic validation.
     withBodies[event] = {
       ...value,
       body: CAIL_SERVICE_EVENT_BODY,
     } as CailEventDefinition;
   }
+  // SAFETY: buildEventCatalog revalidates every completed definition and
+  // preserves the generic catalog's exact event keys.
   return buildEventCatalog(
     withBodies,
     false,
   ) as CailServiceEventCatalog<Catalog>;
 }
 
-export function isDefinedEventCatalog(value: unknown): value is CailEventCatalog {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    VALIDATED_EVENT_CATALOGS.has(value)
-  );
+export function isDefinedEventCatalog<Value>(
+  value: Value,
+): value is Value & CailEventCatalog {
+  const record = plainRecordFrom(value);
+  return record !== undefined && VALIDATED_EVENT_CATALOGS.has(record.owner);
 }
 
 export const CAIL_EVENT_CATALOG = buildEventCatalog({
@@ -668,18 +743,18 @@ export const CAIL_EVENT_CATALOG = buildEventCatalog({
 export function extendCailEventCatalog<
   const Catalog extends Record<string, CailCustomEventDefinition>,
 >(
-  catalog: Catalog & {
-    readonly [Event in keyof Catalog]: Readonly<{ body?: never }>;
-  },
+  catalog: BodylessCatalog<Catalog>,
 ): Readonly<typeof CAIL_EVENT_CATALOG & CailServiceEventCatalog<Catalog>> {
   const serviceCatalog = defineEventCatalog(catalog);
   const combined = Object.assign(
-    Object.create(null) as Record<string, CailEventDefinition>,
+    Object.create(null),
     CAIL_EVENT_CATALOG,
     serviceCatalog,
   );
   const frozen = Object.freeze(combined);
   VALIDATED_EVENT_CATALOGS.add(frozen);
+  // SAFETY: both inputs are separately validated, their namespaces cannot
+  // collide, and Object.assign preserves the exact keys of both catalogs.
   return frozen as Readonly<
     typeof CAIL_EVENT_CATALOG & CailServiceEventCatalog<Catalog>
   >;

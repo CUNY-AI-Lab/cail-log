@@ -38,7 +38,6 @@ platform.emit(CAIL_EVENTS.ACTION_TERMINAL, {
 
 const tenantCatalog = defineEventCatalog({
   "tenant.ready": {
-    body: undefined,
     source: "tenant",
     severity: "info",
     required: [],

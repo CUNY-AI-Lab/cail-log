@@ -8,5 +8,8 @@
 - Producers own service business meaning, lifecycle state, identity, authorization, quotas, accounting, retries, and idempotency.
 - Do not add service-specific business logic, identity derivation, authorization, quota enforcement, or delivery guarantees here.
 - Keep emitted records scalar and contract-shaped so all configured sinks receive the same event.
+- `bun run verify` enforces the vendored full generic anti-slop profile. Fix the
+  contract or boundary that causes a finding; do not add suppressions, evasive
+  wrappers, or generic `SAFETY` comments.
 
 Check with `bun run verify`.
