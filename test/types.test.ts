@@ -16,7 +16,7 @@ describe("type-level event contract", () => {
       service: "gateway", release: "local", env: "test",
       sourceClass: "platform", subjectVersion: "v1",
       catalog: CAIL_EVENT_CATALOG,
-      sink: (event) => events.push(event),
+      sink: (event) => { events.push(event); },
     });
     const tenantCatalog = defineEventCatalog({
       "tenant.requested": {
@@ -29,7 +29,7 @@ describe("type-level event contract", () => {
     const tenant = createCailLogger({
       service: "tenant-app", release: "local", env: "test",
       sourceClass: "tenant", catalog: tenantCatalog,
-      sink: (event) => events.push(event),
+      sink: (event) => { events.push(event); },
     });
 
     platform.emit(CAIL_EVENTS.ACTION_ADMITTED, {
@@ -42,7 +42,7 @@ describe("type-level event contract", () => {
       route: "/convert",
     });
 
-    if (false) {
+    const compileOnlyContract = () => {
       // @ts-expect-error action_id is required by this event definition
       platform.emit(CAIL_EVENTS.ACTION_ADMITTED, {
         product_id: "kale-workbench",
@@ -128,8 +128,9 @@ describe("type-level event contract", () => {
         sourceClass: "platform", subjectVersion: "v1",
         catalog: CAIL_EVENT_CATALOG,
       });
-    }
+    };
 
+    expect(compileOnlyContract).toBeTypeOf("function");
     expect(events).toHaveLength(2);
   });
 });

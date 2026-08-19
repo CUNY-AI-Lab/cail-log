@@ -23,8 +23,8 @@ function capture() {
     sourceClass: "platform",
     subjectVersion: "v1",
     catalog: CAIL_EVENT_CATALOG,
-    sink: (event) => events.push(event),
-    onDiagnostic: (code) => diagnostics.push(code),
+    sink: (event) => { events.push(event); },
+    onDiagnostic: (code) => { diagnostics.push(code); },
     clock: () => NOW_MS,
   });
   return { diagnostics, events, logger };
@@ -69,6 +69,8 @@ describe("schema v2 and closed event definitions", () => {
 
   it("never echoes an unknown event name", () => {
     const { diagnostics, events, logger } = capture();
+    // SAFETY: the invalid name and empty fields intentionally bypass the
+    // compile-time catalog contract to exercise the runtime rejection path.
     logger.emit("student essay text" as never, {} as never);
     expect(events[0]).toMatchObject({
       event_name: CAIL_EVENT_INVALID,
@@ -108,6 +110,8 @@ describe("schema v2 and closed event definitions", () => {
       }),
     ).toThrow(TypeError);
     expect(() =>
+      // SAFETY: product_id is intentionally invalid for a tenant definition so
+      // the runtime source-field compatibility check is exercised.
       defineEventCatalog({
         "test.bad": {
           source: "tenant", severity: "info",
@@ -130,7 +134,7 @@ describe("schema v2 and closed event definitions", () => {
     const logger = createCailLogger({
       service: "sandbox-bridge", release: "local", env: "test",
       sourceClass: "platform", subjectVersion: "v1", catalog,
-      sink: (event) => events.push(event),
+      sink: (event) => { events.push(event); },
     });
     logger.emit("sandbox_bridge.outbox.retried", {
       usage_id: "8b9ec144-39aa-4f1f-bda5-4c645facf2cd",
@@ -156,10 +160,16 @@ describe("schema v2 and closed event definitions", () => {
     };
     expect(() => createCailLogger({ ...base, service: "Has Spaces" })).toThrow(TypeError);
     expect(() => createCailLogger({ ...base, release: "" })).toThrow(TypeError);
+    // SAFETY: the noncanonical environment intentionally bypasses the closed
+    // options type to exercise constructor validation.
     expect(() => createCailLogger({ ...base, env: "prod" as never })).toThrow(TypeError);
+    // SAFETY: the unknown source class intentionally bypasses the closed
+    // options type to exercise constructor validation.
     expect(() =>
       createCailLogger({ ...base, sourceClass: "unknown" } as never),
     ).toThrow(TypeError);
+    // SAFETY: the forged catalog intentionally lacks library provenance so the
+    // constructor's runtime provenance check is exercised.
     expect(() => createCailLogger({
       ...base,
       catalog: {
@@ -169,6 +179,8 @@ describe("schema v2 and closed event definitions", () => {
         },
       } as never,
     })).toThrow(TypeError);
+    // SAFETY: null intentionally bypasses the required options object type to
+    // exercise the constructor's readable-object boundary.
     expect(() => createCailLogger(null as never)).toThrow(TypeError);
   });
 });
@@ -187,8 +199,8 @@ describe("failure containment", () => {
       sourceClass: "platform",
       subjectVersion: "v1",
       catalog: CAIL_EVENT_CATALOG,
-      sink: (event) => events.push(event),
-      onDiagnostic: (code) => diagnostics.push(code),
+      sink: (event) => { events.push(event); },
+      onDiagnostic: (code) => { diagnostics.push(code); },
       clock: () => {
         throw new Error("configured secret");
       },

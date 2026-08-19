@@ -125,6 +125,8 @@ describe("L7 mint only when genuinely absent", () => {
       .spyOn(globalThis.crypto, "getRandomValues")
       .mockImplementation((array) => {
         calls += 1;
+        // SAFETY: correlationFromHeaders passes its owned Uint8Array to this
+        // mock; the wider Web Crypto signature exposes ArrayBufferView.
         const bytes = array as Uint8Array;
         bytes.fill(calls === 1 ? 0 : 1);
         return array;
@@ -134,66 +136,13 @@ describe("L7 mint only when genuinely absent", () => {
     expect(correlation.span_id).not.toBe("0".repeat(16));
 
     random.mockImplementation((array) => {
+      // SAFETY: correlationFromHeaders passes its owned Uint8Array to this
+      // deliberate all-zero entropy failure.
       (array as Uint8Array).fill(0);
       return array;
     });
     expect(() => correlationFromHeaders(withHeaders({}))).toThrow(TypeError);
     random.mockRestore();
-  });
-
-  it("retries all-zero UUID fallback entropy and fails boundedly", () => {
-    const originalCrypto = Object.getOwnPropertyDescriptor(
-      globalThis,
-      "crypto",
-    );
-    let calls = 0;
-    Object.defineProperty(globalThis, "crypto", {
-      configurable: true,
-      value: {
-        getRandomValues(array: ArrayBufferView) {
-          calls += 1;
-          const bytes = new Uint8Array(
-            array.buffer,
-            array.byteOffset,
-            array.byteLength,
-          );
-          bytes.fill(calls === 3 ? 0 : 1);
-          return array;
-        },
-      },
-    });
-    try {
-      const correlation = correlationFromHeaders(withHeaders({}));
-      expect(correlation.request_id).toMatch(UUID);
-      expect(correlation.request_id).not.toBe(
-        "00000000-0000-4000-8000-000000000000",
-      );
-
-      calls = 0;
-      Object.defineProperty(globalThis, "crypto", {
-        configurable: true,
-        value: {
-          getRandomValues(array: ArrayBufferView) {
-            calls += 1;
-            const bytes = new Uint8Array(
-              array.buffer,
-              array.byteOffset,
-              array.byteLength,
-            );
-            bytes.fill(calls <= 2 ? 1 : 0);
-            return array;
-          },
-        },
-      });
-      expect(() => correlationFromHeaders(withHeaders({}))).toThrow(TypeError);
-      expect(calls).toBe(10);
-    } finally {
-      if (originalCrypto === undefined) {
-        Reflect.deleteProperty(globalThis, "crypto");
-      } else {
-        Object.defineProperty(globalThis, "crypto", originalCrypto);
-      }
-    }
   });
 
   it("L7f2 does not adopt the response-only x-request-id alias", () => {
@@ -271,10 +220,33 @@ describe("L7 mint only when genuinely absent", () => {
       ),
     ];
     for (const s of sources) {
+      // SAFETY: malformed reader objects intentionally bypass the public source
+      // union to verify that header access fails closed.
       const c = correlationFromHeaders(s as never);
       expect(c.trace_id).toMatch(HEX32);
       expect(c.request_id).toMatch(UUID);
     }
+  });
+
+  it("snapshots a request-like headers reader once", () => {
+    const first = withHeaders({
+      traceparent: TP,
+      [CAIL_REQUEST_ID_HEADER]: RID,
+    });
+    const second = withHeaders({});
+    let reads = 0;
+    const source = {
+      get headers() {
+        reads += 1;
+        return reads === 1 ? first : second;
+      },
+    };
+
+    const correlation = correlationFromHeaders(source);
+
+    expect(reads).toBe(1);
+    expect(correlation.trace_id).toBe(TRACE);
+    expect(correlation.request_id).toBe(RID);
   });
 });
 
@@ -415,6 +387,8 @@ describe("L7 tracestate forwarding (W3C §3.3)", () => {
       "no-equals",
       "a=b",
       ` ${TS} `, // not exact: surrounding whitespace
+      // SAFETY: the numeric tracestate intentionally bypasses the string field
+      // contract to exercise outbound runtime validation.
       42 as never,
       Array.from({ length: 33 }, (_, i) => `k${i}=v`).join(","),
     ];
@@ -490,6 +464,8 @@ describe("L7 outbound headers", () => {
         [field]: coercible,
       };
 
+      // SAFETY: each coercible object intentionally bypasses CailCorrelation to
+      // prove validation never invokes caller-controlled coercion hooks.
       expect(() =>
         outboundCorrelationHeaders(correlation as never),
       ).toThrow(TypeError);
@@ -518,6 +494,8 @@ describe("L7 outbound headers", () => {
     for (const correlation of hostileValues) {
       let thrown: unknown;
       try {
+        // SAFETY: hostile objects intentionally bypass CailCorrelation to prove
+        // reflection errors are contained and redacted.
         outboundCorrelationHeaders(correlation as never);
       } catch (error) {
         thrown = error;
@@ -557,6 +535,8 @@ describe("L7 outbound headers", () => {
       trace_flags: 1,
       request_id: RID,
     };
+    // SAFETY: malformed numeric and missing values intentionally bypass the
+    // closed correlation fields so the runtime guard can reject them.
     const bad: Array<Partial<CailCorrelation> | null> = [
       null,
       { ...good, trace_id: "0".repeat(32) },
@@ -571,6 +551,8 @@ describe("L7 outbound headers", () => {
       { ...good, request_id: undefined as never },
     ];
     for (const c of bad) {
+      // SAFETY: every member is deliberately incomplete or malformed and is
+      // cast only to exercise outbound runtime validation.
       expect(
         () => outboundCorrelationHeaders(c as CailCorrelation),
         JSON.stringify(c),

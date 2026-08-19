@@ -25,11 +25,13 @@ describe("privacy canary", () => {
     const logger = createCailLogger({
       service: "model-proxy", release: "local", env: "test",
       sourceClass: "platform", subjectVersion: "v1", catalog: EVENTS,
-      sink: (event) => events.push(event),
-      onDiagnostic: (code) => diagnostics.push(code),
+      sink: (event) => { events.push(event); },
+      onDiagnostic: (code) => { diagnostics.push(code); },
     });
 
     for (const field of CAIL_PLATFORM_FIELD_NAMES) {
+      // SAFETY: each dynamic canary value deliberately violates the event's
+      // field-specific type so the runtime privacy boundary is exercised.
       logger.emit("test.canary", { [field]: CANARY } as never);
     }
     for (const hostile of [
@@ -79,8 +81,12 @@ describe("privacy canary", () => {
       { completion: CANARY },
       { exception: new Error(CANARY) },
     ]) {
+      // SAFETY: the hostile fixtures intentionally violate nested field
+      // contracts to prove that free text cannot enter an emitted event.
       logger.emit("test.canary", hostile as never);
     }
+    // SAFETY: both values intentionally bypass the typed event-name and field
+    // contracts to exercise the runtime invalid-event path.
     logger.emit(CANARY as never, {} as never);
 
     const output = JSON.stringify(events) + JSON.stringify(diagnostics);

@@ -488,12 +488,19 @@ catalogs, trust profiles, hostile inputs, failure
 containment, W3C propagation, and a PII-shaped canary attempted through every
 runtime field.
 
-`verify` builds generated `dist`, runs tests and type-checking, and inspects the
-package contents. `dist` is generated at build and is not committed. CI installs
-from the frozen Bun lockfile and runs the same command. Publishing occurs only
-from a stable GitHub release after the workflow checks the tag's package
-version, runs the package checks, tests, type-check, build, and pack check, and
-then publishes.
+`verify` first runs the vendored full generic
+[anti-slop](https://github.com/dmmulroy/anti-slop) profile, then builds generated
+`dist`, runs tests and type-checking, and inspects the package contents. Resolve
+lint findings at the contract or runtime boundary. Do not suppress them, hide
+them behind generic wrappers, or add a `SAFETY` comment unless it names the
+runtime invariant established immediately before the assertion. The vendored
+source and upstream commit are recorded in
+[`tools/oxlint/anti-slop/UPSTREAM.md`](tools/oxlint/anti-slop/UPSTREAM.md).
+
+`dist` is generated at build and is not committed. CI installs from the frozen
+Bun lockfile and runs the same command. Publishing occurs only from a stable
+GitHub release after the workflow checks the tag's package version, runs the
+package checks, tests, type-check, build, and pack check, and then publishes.
 
 [DESIGN.md](DESIGN.md) is the canonical architecture, security, and operations
 guide. This README is the consumer guide.

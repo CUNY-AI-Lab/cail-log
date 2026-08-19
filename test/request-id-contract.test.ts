@@ -49,8 +49,8 @@ describe.each(builds)("$name request-ID contract", (build) => {
       sourceClass: "platform",
       subjectVersion: "v1",
       catalog: build.catalog,
-      sink: (event) => emitted.push(event),
-      onDiagnostic: (code) => diagnostics.push(code),
+      sink: (event) => { emitted.push(event); },
+      onDiagnostic: (code) => { diagnostics.push(code); },
     });
 
     for (const requestId of [UUID_V4, UUID_V7]) {
@@ -97,8 +97,8 @@ describe.each(builds)("$name request-ID contract", (build) => {
       sourceClass: "platform",
       subjectVersion: "v1",
       catalog: build.catalog,
-      sink: (event) => emitted.push(event),
-      onDiagnostic: (code) => diagnostics.push(code),
+      sink: (event) => { emitted.push(event); },
+      onDiagnostic: (code) => { diagnostics.push(code); },
     });
 
     for (const requestId of rejectedRequestIds) {
@@ -139,8 +139,8 @@ describe.each(builds)("$name request-ID contract", (build) => {
       sourceClass: "platform",
       subjectVersion: "v1",
       catalog: build.catalog,
-      sink: (event) => emitted.push(event),
-      onDiagnostic: (code) => diagnostics.push(code),
+      sink: (event) => { emitted.push(event); },
+      onDiagnostic: (code) => { diagnostics.push(code); },
     });
 
     logger.emit(build.events.ACTION_ADMITTED, {

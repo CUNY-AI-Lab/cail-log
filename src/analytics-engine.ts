@@ -1,6 +1,11 @@
 import type { CailLogAttributeValue, CailLogEvent } from "./schema.js";
 import type { CailLogSink } from "./logger.js";
 import { assertValidatedEvent } from "./event-provenance.js";
+import {
+  callableFrom,
+  numberFrom,
+  stringFrom,
+} from "./validation.js";
 
 export const CAIL_ANALYTICS_ENGINE_DATASET = "cail_fleet_events_v1" as const;
 export const CAIL_ANALYTICS_ENGINE_SCHEMA_VERSION = 1 as const;
@@ -59,8 +64,7 @@ function stringAttribute(
   attributes: CailLogEvent["attributes"],
   name: keyof CailLogEvent["attributes"],
 ): string {
-  const value = attributes[name];
-  return typeof value === "string" ? value : "";
+  return stringFrom(attributes[name]) ?? "";
 }
 
 function numberAttribute(
@@ -68,8 +72,9 @@ function numberAttribute(
   name: keyof CailLogEvent["attributes"],
 ): number {
   const value: CailLogAttributeValue | undefined = attributes[name];
-  return typeof value === "number"
-    ? value
+  const number = numberFrom(value);
+  return number !== undefined
+    ? number
     : CAIL_ANALYTICS_ENGINE_MISSING_NUMBER;
 }
 
@@ -139,16 +144,21 @@ export function toAnalyticsEngineDataPoint(
 export function createAnalyticsEngineSink(
   dataset: CailAnalyticsEngineDataset,
 ): CailLogSink {
-  if (
-    typeof dataset !== "object" ||
-    dataset === null ||
-    typeof dataset.writeDataPoint !== "function"
-  ) {
+  let writeDataPoint: CailAnalyticsEngineDataset["writeDataPoint"];
+  try {
+    writeDataPoint = dataset.writeDataPoint;
+  } catch {
     throw new TypeError(
       "cail-log: Analytics Engine dataset must expose writeDataPoint",
     );
   }
-  return (event) => dataset.writeDataPoint(toAnalyticsEngineDataPoint(event));
+  if (callableFrom(writeDataPoint) === undefined) {
+    throw new TypeError(
+      "cail-log: Analytics Engine dataset must expose writeDataPoint",
+    );
+  }
+  return (event) =>
+    writeDataPoint.call(dataset, toAnalyticsEngineDataPoint(event));
 }
 
 /**
@@ -156,20 +166,19 @@ export function createAnalyticsEngineSink(
  * combined rejection into one content-free `sink_error` diagnostic.
  */
 export function fanoutSinks(...sinks: CailLogSink[]): CailLogSink {
-  if (sinks.length === 0 || sinks.some((sink) => typeof sink !== "function")) {
+  if (
+    sinks.length === 0 ||
+    sinks.some((sink) => callableFrom(sink) === undefined)
+  ) {
     throw new TypeError("cail-log: fanout requires one or more sinks");
   }
   return (event) => {
     assertValidatedEvent(event);
-    const pending: Promise<unknown>[] = [];
+    const pending: Promise<void>[] = [];
     for (const sink of sinks) {
       try {
         const result = sink(event);
-        if (
-          (typeof result === "object" || typeof result === "function") &&
-          result !== null &&
-          typeof (result as PromiseLike<unknown>).then === "function"
-        ) {
+        if (result !== undefined) {
           pending.push(Promise.resolve(result));
         }
       } catch (error) {

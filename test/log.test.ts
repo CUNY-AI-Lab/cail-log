@@ -33,8 +33,8 @@ function capture() {
     sourceClass: "platform",
     subjectVersion: "v1",
     catalog: CAIL_EVENT_CATALOG,
-    sink: (event) => events.push(event),
-    onDiagnostic: (code) => diagnostics.push(code),
+    sink: (event) => { events.push(event); },
+    onDiagnostic: (code) => { diagnostics.push(code); },
   });
   return { diagnostics, events, logger };
 }
@@ -51,7 +51,12 @@ describe("strict field behavior", () => {
         optional: [],
       },
     });
-    for (const fields of [null, 42, "content", new Date()]) {
+    for (const { fields, label } of [
+      { fields: null, label: "null" },
+      { fields: 42, label: "number" },
+      { fields: "content", label: "string" },
+      { fields: new Date(), label: "date" },
+    ]) {
       const events: CailLogEvent[] = [];
       const diagnostics: string[] = [];
       const logger = createCailLogger({
@@ -60,12 +65,14 @@ describe("strict field behavior", () => {
         env: "test",
         sourceClass: "tenant",
         catalog,
-        sink: (event) => events.push(event),
-        onDiagnostic: (code) => diagnostics.push(code),
+        sink: (event) => { events.push(event); },
+        onDiagnostic: (code) => { diagnostics.push(code); },
       });
+      // SAFETY: each non-record fixture intentionally bypasses the fields type
+      // to exercise the logger's runtime container rejection.
       logger.emit("test.empty", fields as never);
-      expect(events, Object.prototype.toString.call(fields)).toEqual([]);
-      expect(diagnostics, Object.prototype.toString.call(fields)).toEqual([
+      expect(events, label).toEqual([]);
+      expect(diagnostics, label).toEqual([
         "event_contract_error",
       ]);
     }
@@ -87,6 +94,8 @@ describe("strict field behavior", () => {
       { trace: { trace_id: "1".repeat(32) } },
     ]) {
       const { diagnostics, events, logger } = capture();
+      // SAFETY: the fixtures deliberately provide incomplete trace objects so
+      // the runtime atomic-trace check is exercised.
       logger.emit(CAIL_EVENTS.ACTION_ADMITTED, {
         ...actionFields(),
         ...fields,
@@ -98,6 +107,8 @@ describe("strict field behavior", () => {
 
   it("requires subjects for user and canary principals only", () => {
     const missing = capture();
+    // SAFETY: the identified principal deliberately omits its subject to
+    // exercise runtime principal validation.
     missing.logger.emit(CAIL_EVENTS.ACTION_ADMITTED, {
       action_id: ACTION_ID,
       product_id: "kale-workbench",
@@ -127,6 +138,8 @@ describe("strict field behavior", () => {
   it("does not evaluate or suppress an event for an unknown hostile getter", () => {
     const { diagnostics, events, logger } = capture();
     let reads = 0;
+    // SAFETY: prompt is deliberately outside the event contract to prove that
+    // an unknown hostile getter is never inspected.
     logger.emit(CAIL_EVENTS.ACTION_ADMITTED, {
       ...actionFields(),
       get prompt(): string {
@@ -179,7 +192,7 @@ describe("explicit sinks and derived severity", () => {
       sourceClass: "platform", subjectVersion: "v1",
       catalog: CAIL_EVENT_CATALOG,
       sink: async () => { throw new Error("SECRET"); },
-      onDiagnostic: (code) => diagnostics.push(code),
+      onDiagnostic: (code) => { diagnostics.push(code); },
     });
     logger.emit(CAIL_EVENTS.ACTION_ADMITTED, actionFields());
     await Promise.resolve();
@@ -201,6 +214,8 @@ describe("Sensitive", () => {
 
   it("rejects a sensitive wrapper in an allowed field without leaking it", () => {
     const { diagnostics, events, logger } = capture();
+    // SAFETY: the Sensitive wrapper deliberately bypasses request_id's string
+    // type to exercise runtime redaction and rejection.
     logger.emit(CAIL_EVENTS.ACTION_ADMITTED, {
       ...actionFields(),
       request_id: sensitive("secret-request"),

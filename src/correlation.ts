@@ -2,8 +2,14 @@ import {
   HEX_SPAN_RE,
   HEX_TRACE_RE,
   REQUEST_ID_RE,
-  isPlainObject,
 } from "./schema.js";
+import {
+  booleanFrom,
+  callableFrom,
+  numberFrom,
+  plainRecordFrom,
+  stringFrom,
+} from "./validation.js";
 
 export const TRACEPARENT_HEADER = "traceparent";
 export const TRACESTATE_HEADER = "tracestate";
@@ -25,6 +31,12 @@ export interface CailHeadersLike {
   get(name: string): string | null;
 }
 
+export type CailOutboundCorrelationHeaders = Record<string, string> & {
+  [TRACEPARENT_HEADER]: string;
+  [CAIL_REQUEST_ID_HEADER]: string;
+  [TRACESTATE_HEADER]?: string;
+};
+
 const TRACEPARENT_RE =
   /^([0-9a-f]{2})-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})(-.*)?$/;
 const ZERO_TRACE = "0".repeat(32);
@@ -34,7 +46,7 @@ const TRACESTATE_MAX_CHARS = 512;
 const TRACESTATE_MAX_MEMBERS = 32;
 const RANDOM_ID_ATTEMPTS = 8;
 const TRACESTATE_KEY_RE =
-  /^(?:[a-z][a-z0-9_*\/-]{0,255}|[a-z0-9][a-z0-9_*\/-]{0,240}@[a-z][a-z0-9_*\/-]{0,13})$/;
+  /^(?:[a-z][a-z0-9_*/-]{0,255}|[a-z0-9][a-z0-9_*/-]{0,240}@[a-z][a-z0-9_*/-]{0,13})$/;
 const TRACESTATE_VALUE_RE =
   /^[\x20-\x2b\x2d-\x3c\x3e-\x7e]{0,255}[\x21-\x2b\x2d-\x3c\x3e-\x7e]$/;
 
@@ -46,17 +58,19 @@ type CorrelationSnapshot = Readonly<{
   tracestate: unknown;
 }>;
 
-function snapshotCorrelation(value: unknown): CorrelationSnapshot {
+function snapshotCorrelation<Value>(value: Value): CorrelationSnapshot {
   try {
-    if (!isPlainObject(value)) {
+    const parsed = plainRecordFrom(value);
+    if (parsed === undefined) {
       throw new TypeError("invalid correlation");
     }
+    const fields = parsed;
     return Object.freeze({
-      traceId: value["trace_id"],
-      spanId: value["span_id"],
-      traceFlags: value["trace_flags"],
-      requestId: value["request_id"],
-      tracestate: value["tracestate"],
+      traceId: fields.read("trace_id"),
+      spanId: fields.read("span_id"),
+      traceFlags: fields.read("trace_flags"),
+      requestId: fields.read("request_id"),
+      tracestate: fields.read("tracestate"),
     });
   } catch {
     throw new TypeError(
@@ -65,11 +79,12 @@ function snapshotCorrelation(value: unknown): CorrelationSnapshot {
   }
 }
 
-function sanitizeTracestate(raw: unknown): string | undefined {
-  if (typeof raw !== "string") return undefined;
-  if (raw.length > TRACESTATE_MAX_CHARS) return undefined;
+function sanitizeTracestate<Value>(raw: Value): string | undefined {
+  const text = stringFrom(raw);
+  if (text === undefined) return undefined;
+  if (text.length > TRACESTATE_MAX_CHARS) return undefined;
 
-  const rawMembers = raw.split(",");
+  const rawMembers = text.split(",");
   if (rawMembers.length > TRACESTATE_MAX_MEMBERS) return undefined;
 
   const members: string[] = [];
@@ -116,25 +131,36 @@ function randomHex(bytes: number): string {
 }
 
 function mintRequestId(): string {
-  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
-  const bytes = randomBytes(16);
-  bytes[6] = (bytes[6]! & 0x0f) | 0x40;
-  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
-  const hex = Array.from(bytes, (byte) =>
-    byte.toString(16).padStart(2, "0"),
-  ).join("");
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  return crypto.randomUUID();
 }
 
-function headersOf(
+interface HeaderReaderSnapshot {
+  owner: CailHeadersLike;
+  read: CailHeadersLike["get"];
+}
+
+function snapshotHeaderReader(
   source: CailHeadersLike | { headers: CailHeadersLike },
-): CailHeadersLike | null {
-  if (!source || typeof source !== "object") return null;
-  if (typeof (source as CailHeadersLike).get === "function") {
-    return source as CailHeadersLike;
+): HeaderReaderSnapshot | undefined {
+  try {
+    const owner = "headers" in source ? source.headers : source;
+    const read = owner.get;
+    return callableFrom(read) === undefined ? undefined : { owner, read };
+  } catch {
+    return undefined;
   }
-  const inner = (source as { headers: CailHeadersLike }).headers;
-  return inner && typeof inner.get === "function" ? inner : null;
+}
+
+function readHeader(
+  reader: HeaderReaderSnapshot | undefined,
+  name: string,
+): string | null {
+  if (reader === undefined) return null;
+  try {
+    return reader.read.call(reader.owner, name);
+  } catch {
+    return null;
+  }
 }
 
 export function correlationFromHeaders(
@@ -145,61 +171,47 @@ export function correlationFromHeaders(
   let inboundTraceFlags: 0 | 1 | undefined;
   let requestId: string | undefined;
   let tracestate: string | undefined;
-  let sampled: unknown;
+  let sampled: boolean | undefined;
 
   try {
-    sampled = options.sampled;
+    sampled = booleanFrom(options.sampled);
   } catch {
     // A hostile options reader behaves like an omitted recording decision.
   }
 
-  let headers: CailHeadersLike | null = null;
-  try {
-    headers = headersOf(source);
-  } catch {
-    // A hostile source behaves like missing headers.
+  const reader = snapshotHeaderReader(source);
+  const rawTraceparent = stringFrom(readHeader(reader, TRACEPARENT_HEADER));
+  const rawTracestate = readHeader(reader, TRACESTATE_HEADER);
+  const rawRequestId = stringFrom(readHeader(reader, CAIL_REQUEST_ID_HEADER));
+
+  if (rawTraceparent !== undefined) {
+    const match = TRACEPARENT_RE.exec(rawTraceparent.trim());
+    if (
+      match &&
+      match[1] !== "ff" &&
+      !(match[1] === "00" && match[5] !== undefined) &&
+      match[2] !== ZERO_TRACE &&
+      match[3] !== ZERO_SPAN
+    ) {
+      traceId = match[2];
+      // SAFETY: a bitwise AND with one can produce only zero or one.
+      inboundTraceFlags = (Number.parseInt(match[4]!, 16) & 1) as 0 | 1;
+    }
   }
 
-  if (headers) {
-    let rawTraceparent: string | null = null;
-    let rawTracestate: string | null = null;
-    let rawRequestId: string | null = null;
-    try {
-      rawTraceparent = headers.get(TRACEPARENT_HEADER);
-      rawTracestate = headers.get(TRACESTATE_HEADER);
-      rawRequestId = headers.get(CAIL_REQUEST_ID_HEADER);
-    } catch {
-      // A hostile reader behaves like missing headers.
-    }
-
-    if (typeof rawTraceparent === "string") {
-      const match = TRACEPARENT_RE.exec(rawTraceparent.trim());
-      if (
-        match &&
-        match[1] !== "ff" &&
-        !(match[1] === "00" && match[5] !== undefined) &&
-        match[2] !== ZERO_TRACE &&
-        match[3] !== ZERO_SPAN
-      ) {
-        traceId = match[2];
-        inboundTraceFlags = (Number.parseInt(match[4]!, 16) & 1) as 0 | 1;
-      }
-    }
-
-    if (traceId !== undefined) {
-      tracestate = sanitizeTracestate(rawTracestate);
-    }
-    if (typeof rawRequestId === "string") {
-      const candidate = rawRequestId.trim();
-      if (REQUEST_ID_RE.test(candidate)) requestId = candidate;
-    }
+  if (traceId !== undefined) {
+    tracestate = sanitizeTracestate(rawTracestate);
+  }
+  if (rawRequestId !== undefined) {
+    const candidate = rawRequestId.trim();
+    if (REQUEST_ID_RE.test(candidate)) requestId = candidate;
   }
 
   const correlation: CailCorrelation = {
     trace_id: traceId ?? randomHex(16),
     span_id: randomHex(8),
     trace_flags:
-      typeof sampled === "boolean"
+      sampled !== undefined
         ? sampled
           ? 1
           : 0
@@ -212,7 +224,7 @@ export function correlationFromHeaders(
 
 export function outboundCorrelationHeaders(
   correlation: CailCorrelation,
-): Record<string, string> {
+): CailOutboundCorrelationHeaders {
   const {
     traceId,
     spanId,
@@ -220,46 +232,56 @@ export function outboundCorrelationHeaders(
     requestId,
     tracestate,
   } = snapshotCorrelation(correlation);
+  const decodedTraceId = stringFrom(traceId);
   if (
-    typeof traceId !== "string" ||
-    !HEX_TRACE_RE.test(traceId) ||
-    traceId === ZERO_TRACE
+    decodedTraceId === undefined ||
+    !HEX_TRACE_RE.test(decodedTraceId) ||
+    decodedTraceId === ZERO_TRACE
   ) {
     throw new TypeError(
       "cail-log: trace_id must be 32 lowercase hex chars, not all-zero",
     );
   }
+  const decodedSpanId = stringFrom(spanId);
   if (
-    typeof spanId !== "string" ||
-    !HEX_SPAN_RE.test(spanId) ||
-    spanId === ZERO_SPAN
+    decodedSpanId === undefined ||
+    !HEX_SPAN_RE.test(decodedSpanId) ||
+    decodedSpanId === ZERO_SPAN
   ) {
     throw new TypeError(
       "cail-log: span_id must be 16 lowercase hex chars, not all-zero",
     );
   }
-  if (typeof requestId !== "string" || !REQUEST_ID_RE.test(requestId)) {
+  const decodedRequestId = stringFrom(requestId);
+  if (
+    decodedRequestId === undefined ||
+    !REQUEST_ID_RE.test(decodedRequestId)
+  ) {
     throw new TypeError(
       "cail-log: request_id must be a lowercase UUID v4 or v7",
     );
   }
-  if (traceFlags !== 0 && traceFlags !== 1) {
+  const decodedTraceFlags = numberFrom(traceFlags);
+  if (decodedTraceFlags !== 0 && decodedTraceFlags !== 1) {
     throw new TypeError("cail-log: trace_flags must be 0 or 1");
   }
+  const decodedTracestate =
+    tracestate === undefined ? undefined : stringFrom(tracestate);
   if (
     tracestate !== undefined &&
-    (typeof tracestate !== "string" ||
-      sanitizeTracestate(tracestate) !== tracestate)
+    (decodedTracestate === undefined ||
+      sanitizeTracestate(decodedTracestate) !== decodedTracestate)
   ) {
     throw new TypeError(
       "cail-log: tracestate must be a structurally valid W3C tracestate list",
     );
   }
 
-  const headers: Record<string, string> = {
-    [TRACEPARENT_HEADER]: `00-${traceId}-${spanId}-0${traceFlags}`,
-    [CAIL_REQUEST_ID_HEADER]: requestId,
+  const headers: CailOutboundCorrelationHeaders = {
+    [TRACEPARENT_HEADER]: `00-${decodedTraceId}-${decodedSpanId}-0${decodedTraceFlags}`,
+    [CAIL_REQUEST_ID_HEADER]: decodedRequestId,
   };
-  if (tracestate !== undefined) headers[TRACESTATE_HEADER] = tracestate;
+  if (decodedTracestate !== undefined)
+    headers[TRACESTATE_HEADER] = decodedTracestate;
   return headers;
 }

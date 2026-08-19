@@ -1,6 +1,6 @@
 {
   "name": "@cuny-ai-lab/cail-log",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "The pre-release CAIL operational event primitive: typed event contracts, trusted fleet attribution, privacy-safe diagnostics, and explicit structured sinks.",
   "type": "module",
   "license": "MIT",
@@ -26,16 +26,19 @@
   },
   "packageManager": "bun@1.3.14",
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "lint": "bun run --bun oxlint .",
     "typecheck": "tsc -p tsconfig.build.json --noEmit && tsc -p tsconfig.test.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "prepublishOnly": "bun run verify",
     "prepare": "bun run build",
-    "verify": "bun run build && bun run test && bun run typecheck && bun pm pack --dry-run --ignore-scripts"
+    "verify": "bun run lint && bun run build && bun run test && bun run typecheck && bun pm pack --dry-run --ignore-scripts"
   },
   "devDependencies": {
+    "@oxlint/plugins": "1.79.0",
     "@types/node": "^20.17.6",
+    "oxlint": "1.79.0",
     "typescript": "^5.6.3",
     "vitest": "4.1.10"
   },
@@ -46,5 +49,11 @@
   "publishConfig": {
     "registry": "https://npm.pkg.github.com",
     "access": "restricted"
+  },
+  "dependencies": {
+    "zod": "4.4.3"
+  },
+  "overrides": {
+    "nanoid": "3.3.18"
   }
 }

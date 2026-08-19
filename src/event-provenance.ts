@@ -8,11 +8,7 @@ export function markValidatedEvent(event: CailLogEvent): CailLogEvent {
 }
 
 export function assertValidatedEvent(event: CailLogEvent): void {
-  if (
-    typeof event !== "object" ||
-    event === null ||
-    !VALIDATED_EVENTS.has(event)
-  ) {
+  if (!VALIDATED_EVENTS.has(event)) {
     throw new TypeError(
       "cail-log: sinks accept only events produced by createCailLogger",
     );

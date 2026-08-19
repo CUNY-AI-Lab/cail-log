@@ -21,7 +21,7 @@ function capture() {
     sourceClass: "platform",
     subjectVersion: "v1",
     catalog: CAIL_EVENT_CATALOG,
-    sink: (event) => events.push(event),
+    sink: (event) => { events.push(event); },
     clock: () => Date.UTC(2026, 6, 13, 16, 0, 0),
   });
   return { events, logger };

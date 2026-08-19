@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   CAIL_EVENT_CATALOG,
   CAIL_EVENTS,
@@ -21,8 +21,8 @@ function capture() {
     sourceClass: "platform",
     subjectVersion: "v1",
     catalog: CAIL_EVENT_CATALOG,
-    sink: (event) => events.push(event),
-    onDiagnostic: (code) => diagnostics.push(code),
+    sink: (event) => { events.push(event); },
+    onDiagnostic: (code) => { diagnostics.push(code); },
     clock: () => Date.UTC(2026, 6, 13, 16, 0, 0),
   });
   return { diagnostics, events, logger };
@@ -80,6 +80,8 @@ describe("canonical event contracts", () => {
 
   it("drops contradictory principal and terminal facts", () => {
     const first = capture();
+    // SAFETY: the anonymous principal deliberately carries a forbidden subject
+    // so the runtime discriminated-union guard is exercised.
     first.logger.emit(CAIL_EVENTS.ACTION_TERMINAL, {
       action_id: ACTION_ID,
       product_id: "kale-workbench",
@@ -91,6 +93,8 @@ describe("canonical event contracts", () => {
     expect(first.diagnostics).toEqual(["event_contract_error"]);
 
     const second = capture();
+    // SAFETY: the mismatched outcome and reason deliberately bypass the
+    // compile-time terminal union to exercise runtime coherence validation.
     second.logger.emit(CAIL_EVENTS.ACTION_TERMINAL, {
       action_id: ACTION_ID,
       product_id: "kale-workbench",
@@ -121,7 +125,6 @@ describe("canonical event contracts", () => {
 
     const tenantCatalog = defineEventCatalog({
       "tenant.ready": {
-        body: undefined,
         source: "tenant",
         severity: "info",
         required: [],
@@ -135,8 +138,8 @@ describe("canonical event contracts", () => {
       sourceClass: "tenant",
       subjectVersion: undefined,
       catalog: tenantCatalog,
-      sink: (event) => events.push(event),
-      onDiagnostic: (code) => diagnostics.push(code),
+      sink: (event) => { events.push(event); },
+      onDiagnostic: (code) => { diagnostics.push(code); },
     });
     tenant.emit("tenant.ready");
 
@@ -160,6 +163,8 @@ describe("canonical event contracts", () => {
 
   it("ignores an arbitrary unknown key without leaking or suppressing the event", () => {
     const { diagnostics, events, logger } = capture();
+    // SAFETY: prompt is deliberately outside the event contract to prove that
+    // unknown caller keys are neither read nor emitted.
     logger.emit(CAIL_EVENTS.ACTION_ADMITTED, {
       action_id: ACTION_ID,
       product_id: "kale-workbench",

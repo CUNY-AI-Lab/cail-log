@@ -60,13 +60,17 @@ describe("validated event provenance", () => {
     expect(() => workersStructuredSink(forged)).toThrow(TypeError);
     expect(() => toAnalyticsEngineDataPoint(forged)).toThrow(TypeError);
     expect(() =>
-      createAnalyticsEngineSink({ writeDataPoint: (point) => writes.push(point) })(
-        forged,
-      ),
+      createAnalyticsEngineSink({
+        writeDataPoint: (point) => {
+          writes.push(point);
+        },
+      })(forged),
     ).toThrow(TypeError);
-    expect(() => fanoutSinks(() => writes.push("delivered"))(forged)).toThrow(
-      TypeError,
-    );
+    expect(() =>
+      fanoutSinks(() => {
+        writes.push("delivered");
+      })(forged),
+    ).toThrow(TypeError);
 
     expect(log).not.toHaveBeenCalled();
     expect(warn).not.toHaveBeenCalled();
@@ -104,6 +108,8 @@ describe("content-free service catalogs", () => {
       return count === 1 ? first : later;
     };
 
+    // SAFETY: the changing getters deliberately return invalid second-read
+    // values; the casted branches prove options are snapshotted exactly once.
     const logger = createCailLogger({
       get service() {
         return changing("service", "fixture-service", "private-service");
@@ -112,21 +118,29 @@ describe("content-free service catalogs", () => {
         return changing("release", "fixture", "private-release");
       },
       get env() {
+        // SAFETY: the second getter value intentionally violates the closed
+        // environment type to prove it is never read.
         return changing("env", "test" as const, "student-secret" as never);
       },
       get sourceClass() {
+        // SAFETY: the second getter value intentionally violates the closed
+        // source-class type to prove it is never read.
         return changing("sourceClass", "tenant" as const, "platform" as never);
       },
       get subjectVersion() {
+        // SAFETY: the second getter value intentionally violates the tenant
+        // options union to prove it is never read.
         return changing("subjectVersion", undefined, "private-version" as never);
       },
       get catalog() {
+        // SAFETY: the second getter value intentionally lacks catalog
+        // provenance to prove it is never read.
         return changing("catalog", safeCatalog, forgedCatalog as never);
       },
       get sink() {
         return changing(
           "sink",
-          (event: CailLogEvent) => events.push(event),
+          (event: CailLogEvent) => { events.push(event); },
           () => {
             throw new Error("private-sink-sentinel");
           },
@@ -135,7 +149,7 @@ describe("content-free service catalogs", () => {
       get onDiagnostic() {
         return changing(
           "onDiagnostic",
-          (code: string) => diagnostics.push(code),
+          (code: string) => { diagnostics.push(code); },
           () => {
             throw new Error("private-diagnostic-sentinel");
           },
@@ -209,6 +223,8 @@ describe("content-free service catalogs", () => {
     for (const options of [hostileGetter, hostileProxy]) {
       let thrown: unknown;
       try {
+        // SAFETY: hostile objects intentionally bypass the logger options type
+        // to exercise contained reflection and getter failures.
         createCailLogger(options as never);
       } catch (error) {
         thrown = error;
@@ -246,6 +262,8 @@ describe("content-free service catalogs", () => {
 
         let thrown: unknown;
         try {
+          // SAFETY: each hostile field deliberately bypasses the option type to
+          // prove unrelated values are never reflected or inspected.
           createLogger(options as never);
         } catch (error) {
           thrown = error;
@@ -270,6 +288,8 @@ describe("content-free service catalogs", () => {
   });
 
   it("rejects a runtime body escape hatch even when types are bypassed", () => {
+    // SAFETY: the caller-owned body deliberately bypasses the bodyless catalog
+    // type to exercise the runtime fixed-body boundary.
     expect(() =>
       defineEventCatalog({
         "service.leak": {
@@ -307,7 +327,7 @@ describe("identifier and subject privacy boundaries", () => {
       sourceClass: "platform",
       subjectVersion: "v1",
       catalog: CAIL_EVENT_CATALOG,
-      sink: (event) => events.push(event),
+      sink: (event) => { events.push(event); },
     });
     logger.emit(CAIL_EVENTS.REQUEST_RECEIVED, {
       request_id: "0af7651b-16f9-4a3b-8f42-00f067aa0ba9",
@@ -342,9 +362,11 @@ describe("identifier and subject privacy boundaries", () => {
         sourceClass: "platform",
         subjectVersion: "v1",
         catalog: GRAMMAR_CATALOG,
-        sink: (event) => events.push(event),
-        onDiagnostic: (code) => diagnostics.push(code),
+        sink: (event) => { events.push(event); },
+        onDiagnostic: (code) => { diagnostics.push(code); },
       });
+      // SAFETY: each secret token deliberately bypasses its field-specific type
+      // to exercise runtime secret-pattern rejection.
       logger.emit("test.secret_grammars", { [field]: canary } as never);
       expect(events, field).toEqual([]);
       expect(diagnostics, field).toEqual(["event_contract_error"]);
@@ -383,8 +405,8 @@ describe("identifier and subject privacy boundaries", () => {
       sourceClass: "platform",
       subjectVersion: "v1",
       catalog: CAIL_EVENT_CATALOG,
-      sink: (event) => events.push(event),
-      onDiagnostic: (code) => diagnostics.push(code),
+      sink: (event) => { events.push(event); },
+      onDiagnostic: (code) => { diagnostics.push(code); },
     });
     for (const subject of [
       "cail-0123456789abcdef0123456789abcdef",
@@ -411,12 +433,16 @@ describe("identifier and subject privacy boundaries", () => {
       catalog: CAIL_EVENT_CATALOG,
       sink: () => {},
     };
+    // SAFETY: the missing subject version deliberately bypasses the platform
+    // options union to exercise fail-closed constructor validation.
     expect(() =>
       createCailLogger({
         ...base,
         sourceClass: "platform",
       } as never),
     ).toThrow(TypeError);
+    // SAFETY: the tenant subject version deliberately bypasses the tenant
+    // options union to exercise fail-closed constructor validation.
     expect(() =>
       createCailLogger({
         ...base,
