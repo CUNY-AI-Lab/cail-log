@@ -1,6 +1,6 @@
 {
   "name": "@cuny-ai-lab/cail-log",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "The pre-release CAIL operational event primitive: typed event contracts, trusted fleet attribution, privacy-safe diagnostics, and explicit structured sinks.",
   "type": "module",
   "license": "MIT",
