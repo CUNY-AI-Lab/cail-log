@@ -652,11 +652,7 @@ function buildEvent<EventName, Fields>(
     output.trace_flags = traceFlags;
   }
 
-  return Object.freeze({
-    ...output,
-    resource: Object.freeze({ ...output.resource }),
-    attributes: eventAttributes,
-  });
+  return Object.freeze(output);
 }
 
 export function createCailLogger<

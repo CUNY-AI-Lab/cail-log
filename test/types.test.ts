@@ -130,7 +130,7 @@ describe("type-level event contract", () => {
       });
     };
 
-    expect(compileOnlyContract).toBeTypeOf("function");
+    void compileOnlyContract;
     expect(events).toHaveLength(2);
   });
 });

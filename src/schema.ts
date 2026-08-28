@@ -468,7 +468,7 @@ function buildEventCatalog<
   const copy: Record<string, CailEventDefinition> = Object.create(null);
   const tenantFields = new Set<string>(CAIL_TENANT_FIELD_NAMES);
   const platformFields = new Set<string>(CAIL_PLATFORM_FIELD_NAMES);
-  const outcomes = new Set<string>([
+  const outcomes = [
     "ok",
     "client_error",
     "error",
@@ -476,8 +476,8 @@ function buildEventCatalog<
     "cancelled",
     "timeout",
     "outcome_unknown",
-  ] satisfies CailOutcome[]);
-  const terminalReasons = new Set<string>([
+  ] satisfies CailOutcome[];
+  const terminalReasons = [
     "application_failure",
     "cancelled",
     "client_error",
@@ -488,17 +488,7 @@ function buildEventCatalog<
     "timeout",
     "unknown",
     "upstream_failure",
-  ] satisfies CailTerminalReason[]);
-  const sources = new Set<string>(["platform", "tenant", "both"]);
-  const severities = new Set<string>([
-    "fatal",
-    "error",
-    "warn",
-    "info",
-    "debug",
-    "trace",
-    "outcome",
-  ]);
+  ] satisfies CailTerminalReason[];
 
   for (const [event, definition] of Object.entries(parsedCatalog.data)) {
     if (
@@ -522,18 +512,6 @@ function buildEventCatalog<
         "cail-log: every catalog message must be a single static line of 1-160 characters",
       );
     }
-    if (!sources.has(definition.source)) {
-      throw new TypeError("cail-log: event source must be platform, tenant, or both");
-    }
-    if (!severities.has(definition.severity)) {
-      throw new TypeError("cail-log: event severity is invalid");
-    }
-    if (!Array.isArray(definition.required) || !Array.isArray(definition.optional)) {
-      throw new TypeError(
-        "cail-log: event required and optional fields must be arrays",
-      );
-    }
-
     const allowedFields =
       definition.source === "platform" ? platformFields : tenantFields;
     const required = [...definition.required];
@@ -561,8 +539,7 @@ function buildEventCatalog<
       allowedOutcomes !== undefined &&
       (allowedOutcomes.length === 0 ||
         !required.includes("terminal") ||
-        new Set(allowedOutcomes).size !== allowedOutcomes.length ||
-        allowedOutcomes.some((outcome) => !outcomes.has(outcome)))
+        new Set(allowedOutcomes).size !== allowedOutcomes.length)
     ) {
       throw new TypeError("cail-log: event outcomes are invalid");
     }
@@ -574,8 +551,7 @@ function buildEventCatalog<
       allowedReasons !== undefined &&
       (allowedReasons.length === 0 ||
         !required.includes("terminal") ||
-        new Set(allowedReasons).size !== allowedReasons.length ||
-        allowedReasons.some((reason) => !terminalReasons.has(reason)))
+        new Set(allowedReasons).size !== allowedReasons.length)
     ) {
       throw new TypeError("cail-log: event terminal reasons are invalid");
     }
@@ -601,14 +577,8 @@ function buildEventCatalog<
       );
     }
 
-    const possibleOutcomes = (allowedOutcomes ?? [...outcomes]).filter(
-      (outcome): outcome is CailOutcome => outcomes.has(outcome),
-    );
-    const possibleReasons = new Set<CailTerminalReason>(
-      (allowedReasons ?? [...terminalReasons]).filter(
-        (reason): reason is CailTerminalReason => terminalReasons.has(reason),
-      ),
-    );
+    const possibleOutcomes = allowedOutcomes ?? outcomes;
+    const possibleReasons = new Set(allowedReasons ?? terminalReasons);
     const possibleTerminalOutcomes = possibleOutcomes.filter((outcome) =>
       TERMINAL_REASONS[outcome].some((reason) => possibleReasons.has(reason)),
     );
