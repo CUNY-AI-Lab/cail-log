@@ -119,6 +119,29 @@ describe("schema v2 and closed event definitions", () => {
         },
       } as never),
     ).toThrow(TypeError);
+    // SAFETY: the caller-owned body deliberately bypasses the bodyless catalog
+    // type to exercise the runtime fixed-body boundary.
+    expect(() =>
+      defineEventCatalog({
+        "service.leak": {
+          body: "student essay text",
+          source: "tenant",
+          severity: "info",
+          required: [],
+          optional: [],
+        },
+      } as never),
+    ).toThrow(TypeError);
+    expect(() =>
+      defineEventCatalog({
+        "sk-cail-synthetic-secret-7f3a": {
+          source: "tenant",
+          severity: "info",
+          required: [],
+          optional: [],
+        },
+      }),
+    ).toThrow(TypeError);
   });
 
   it("extends the canonical catalog without permitting redefinition", () => {

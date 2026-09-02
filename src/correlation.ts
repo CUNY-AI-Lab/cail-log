@@ -7,9 +7,8 @@ import {
   booleanFrom,
   callableFrom,
   numberFrom,
-  plainRecordFrom,
   stringFrom,
-} from "./validation.js";
+} from "./internal.js";
 
 export const TRACEPARENT_HEADER = "traceparent";
 export const TRACESTATE_HEADER = "tracestate";
@@ -44,40 +43,10 @@ const ZERO_SPAN = "0".repeat(16);
 
 const TRACESTATE_MAX_CHARS = 512;
 const TRACESTATE_MAX_MEMBERS = 32;
-const RANDOM_ID_ATTEMPTS = 8;
 const TRACESTATE_KEY_RE =
   /^(?:[a-z][a-z0-9_*/-]{0,255}|[a-z0-9][a-z0-9_*/-]{0,240}@[a-z][a-z0-9_*/-]{0,13})$/;
 const TRACESTATE_VALUE_RE =
   /^[\x20-\x2b\x2d-\x3c\x3e-\x7e]{0,255}[\x21-\x2b\x2d-\x3c\x3e-\x7e]$/;
-
-type CorrelationSnapshot = Readonly<{
-  traceId: unknown;
-  spanId: unknown;
-  traceFlags: unknown;
-  requestId: unknown;
-  tracestate: unknown;
-}>;
-
-function snapshotCorrelation<Value>(value: Value): CorrelationSnapshot {
-  try {
-    const parsed = plainRecordFrom(value);
-    if (parsed === undefined) {
-      throw new TypeError("invalid correlation");
-    }
-    const fields = parsed;
-    return Object.freeze({
-      traceId: fields.read("trace_id"),
-      spanId: fields.read("span_id"),
-      traceFlags: fields.read("trace_flags"),
-      requestId: fields.read("request_id"),
-      tracestate: fields.read("tracestate"),
-    });
-  } catch {
-    throw new TypeError(
-      "cail-log: correlation must be a readable plain object",
-    );
-  }
-}
 
 function sanitizeTracestate<Value>(raw: Value): string | undefined {
   const text = stringFrom(raw);
@@ -110,16 +79,9 @@ function sanitizeTracestate<Value>(raw: Value): string | undefined {
 }
 
 function randomBytes(bytes: number): Uint8Array {
-  for (let attempt = 0; attempt < RANDOM_ID_ATTEMPTS; attempt += 1) {
-    const buffer = new Uint8Array(bytes);
-    crypto.getRandomValues(buffer);
-    if (buffer.some((byte) => byte !== 0)) {
-      return buffer;
-    }
-  }
-  throw new TypeError(
-    "cail-log: secure random source produced an all-zero identifier",
-  );
+  const buffer = new Uint8Array(bytes);
+  crypto.getRandomValues(buffer);
+  return buffer;
 }
 
 function randomHex(bytes: number): string {
@@ -134,30 +96,14 @@ function mintRequestId(): string {
   return crypto.randomUUID();
 }
 
-interface HeaderReaderSnapshot {
-  owner: CailHeadersLike;
-  read: CailHeadersLike["get"];
-}
-
-function snapshotHeaderReader(
+function readHeader(
   source: CailHeadersLike | { headers: CailHeadersLike },
-): HeaderReaderSnapshot | undefined {
+  name: string,
+): string | null {
   try {
     const owner = "headers" in source ? source.headers : source;
     const read = owner.get;
-    return callableFrom(read) === undefined ? undefined : { owner, read };
-  } catch {
-    return undefined;
-  }
-}
-
-function readHeader(
-  reader: HeaderReaderSnapshot | undefined,
-  name: string,
-): string | null {
-  if (reader === undefined) return null;
-  try {
-    return reader.read.call(reader.owner, name);
+    return callableFrom(read) === undefined ? null : read.call(owner, name);
   } catch {
     return null;
   }
@@ -171,18 +117,11 @@ export function correlationFromHeaders(
   let inboundTraceFlags: 0 | 1 | undefined;
   let requestId: string | undefined;
   let tracestate: string | undefined;
-  let sampled: boolean | undefined;
+  const sampled = booleanFrom(options.sampled);
 
-  try {
-    sampled = booleanFrom(options.sampled);
-  } catch {
-    // A hostile options reader behaves like an omitted recording decision.
-  }
-
-  const reader = snapshotHeaderReader(source);
-  const rawTraceparent = stringFrom(readHeader(reader, TRACEPARENT_HEADER));
-  const rawTracestate = readHeader(reader, TRACESTATE_HEADER);
-  const rawRequestId = stringFrom(readHeader(reader, CAIL_REQUEST_ID_HEADER));
+  const rawTraceparent = stringFrom(readHeader(source, TRACEPARENT_HEADER));
+  const rawTracestate = readHeader(source, TRACESTATE_HEADER);
+  const rawRequestId = stringFrom(readHeader(source, CAIL_REQUEST_ID_HEADER));
 
   if (rawTraceparent !== undefined) {
     const match = TRACEPARENT_RE.exec(rawTraceparent.trim());
@@ -225,14 +164,7 @@ export function correlationFromHeaders(
 export function outboundCorrelationHeaders(
   correlation: CailCorrelation,
 ): CailOutboundCorrelationHeaders {
-  const {
-    traceId,
-    spanId,
-    traceFlags,
-    requestId,
-    tracestate,
-  } = snapshotCorrelation(correlation);
-  const decodedTraceId = stringFrom(traceId);
+  const decodedTraceId = stringFrom(correlation.trace_id);
   if (
     decodedTraceId === undefined ||
     !HEX_TRACE_RE.test(decodedTraceId) ||
@@ -242,7 +174,7 @@ export function outboundCorrelationHeaders(
       "cail-log: trace_id must be 32 lowercase hex chars, not all-zero",
     );
   }
-  const decodedSpanId = stringFrom(spanId);
+  const decodedSpanId = stringFrom(correlation.span_id);
   if (
     decodedSpanId === undefined ||
     !HEX_SPAN_RE.test(decodedSpanId) ||
@@ -252,7 +184,7 @@ export function outboundCorrelationHeaders(
       "cail-log: span_id must be 16 lowercase hex chars, not all-zero",
     );
   }
-  const decodedRequestId = stringFrom(requestId);
+  const decodedRequestId = stringFrom(correlation.request_id);
   if (
     decodedRequestId === undefined ||
     !REQUEST_ID_RE.test(decodedRequestId)
@@ -261,14 +193,15 @@ export function outboundCorrelationHeaders(
       "cail-log: request_id must be a lowercase UUID v4 or v7",
     );
   }
-  const decodedTraceFlags = numberFrom(traceFlags);
+  const decodedTraceFlags = numberFrom(correlation.trace_flags);
   if (decodedTraceFlags !== 0 && decodedTraceFlags !== 1) {
     throw new TypeError("cail-log: trace_flags must be 0 or 1");
   }
-  const decodedTracestate =
-    tracestate === undefined ? undefined : stringFrom(tracestate);
+  const decodedTracestate = correlation.tracestate === undefined
+    ? undefined
+    : stringFrom(correlation.tracestate);
   if (
-    tracestate !== undefined &&
+    correlation.tracestate !== undefined &&
     (decodedTracestate === undefined ||
       sanitizeTracestate(decodedTracestate) !== decodedTracestate)
   ) {

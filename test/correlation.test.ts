@@ -1,6 +1,9 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import {
+  CAIL_EVENT_CATALOG,
+  CAIL_EVENTS,
   correlationFromHeaders,
+  createCailLogger,
   outboundCorrelationHeaders,
   TRACEPARENT_HEADER,
   TRACESTATE_HEADER,
@@ -12,6 +15,7 @@ const TRACE = "0af7651916cd43dd8448eb211c80319c";
 const PARENT_SPAN = "b7ad6b7169203331";
 const TP = `00-${TRACE}-${PARENT_SPAN}-01`;
 const RID = "0af7651b-16f9-4a3b-8f42-00f067aa0ba9";
+const UUID_V7 = "019f8bdc-342a-76e1-ba71-005d69808f86";
 
 const HEX32 = /^[0-9a-f]{32}$/;
 const HEX16 = /^[0-9a-f]{16}$/;
@@ -37,12 +41,17 @@ describe("L7 adopt", () => {
     expect(c.request_id).toMatch(UUID);
   });
 
-  it("L7b an existing X-CAIL-Request-Id is adopted VERBATIM (never regenerated)", () => {
-    const c = correlationFromHeaders(
-      withHeaders({ [CAIL_REQUEST_ID_HEADER]: RID }),
-    );
-    expect(c.request_id).toBe(RID);
-    expect(c.trace_id).toMatch(HEX32);
+  it("L7b existing UUIDv4 and UUIDv7 request IDs are adopted and forwarded verbatim", () => {
+    for (const requestId of [RID, UUID_V7]) {
+      const correlation = correlationFromHeaders(
+        withHeaders({ [CAIL_REQUEST_ID_HEADER]: requestId }),
+      );
+      expect(correlation.request_id).toBe(requestId);
+      expect(correlation.trace_id).toMatch(HEX32);
+      expect(
+        outboundCorrelationHeaders(correlation)[CAIL_REQUEST_ID_HEADER],
+      ).toBe(requestId);
+    }
   });
 
   it("L7c both present -> both adopted together", () => {
@@ -92,57 +101,12 @@ describe("L7 mint only when genuinely absent", () => {
     ).toMatch(/-00$/);
   });
 
-  it("snapshots a recording decision once and contains hostile access", () => {
-    let reads = 0;
-    const changing = correlationFromHeaders(withHeaders({}), {
-      get sampled() {
-        reads += 1;
-        return reads === 1;
-      },
-    });
-    expect(reads).toBe(1);
-    expect(changing.trace_flags).toBe(1);
-
-    const hostile = correlationFromHeaders(withHeaders({}), {
-      get sampled(): never {
-        throw new Error("private-sampled-sentinel");
-      },
-    });
-    expect(hostile.trace_flags).toBe(0);
-  });
-
   it("L7f minted ids differ across calls (no fixed fallback id)", () => {
     const a = correlationFromHeaders(withHeaders({}));
     const b = correlationFromHeaders(withHeaders({}));
     expect(a.trace_id).not.toBe(b.trace_id);
     expect(a.span_id).not.toBe(b.span_id);
     expect(a.request_id).not.toBe(b.request_id);
-  });
-
-  it("retries all-zero random identifiers and fails boundedly on entropy failure", () => {
-    let calls = 0;
-    const random = vi
-      .spyOn(globalThis.crypto, "getRandomValues")
-      .mockImplementation((array) => {
-        calls += 1;
-        // SAFETY: correlationFromHeaders passes its owned Uint8Array to this
-        // mock; the wider Web Crypto signature exposes ArrayBufferView.
-        const bytes = array as Uint8Array;
-        bytes.fill(calls === 1 ? 0 : 1);
-        return array;
-      });
-    const correlation = correlationFromHeaders(withHeaders({}));
-    expect(correlation.trace_id).not.toBe("0".repeat(32));
-    expect(correlation.span_id).not.toBe("0".repeat(16));
-
-    random.mockImplementation((array) => {
-      // SAFETY: correlationFromHeaders passes its owned Uint8Array to this
-      // deliberate all-zero entropy failure.
-      (array as Uint8Array).fill(0);
-      return array;
-    });
-    expect(() => correlationFromHeaders(withHeaders({}))).toThrow(TypeError);
-    random.mockRestore();
   });
 
   it("L7f2 does not adopt the response-only x-request-id alias", () => {
@@ -228,26 +192,6 @@ describe("L7 mint only when genuinely absent", () => {
     }
   });
 
-  it("snapshots a request-like headers reader once", () => {
-    const first = withHeaders({
-      traceparent: TP,
-      [CAIL_REQUEST_ID_HEADER]: RID,
-    });
-    const second = withHeaders({});
-    let reads = 0;
-    const source = {
-      get headers() {
-        reads += 1;
-        return reads === 1 ? first : second;
-      },
-    };
-
-    const correlation = correlationFromHeaders(source);
-
-    expect(reads).toBe(1);
-    expect(correlation.trace_id).toBe(TRACE);
-    expect(correlation.request_id).toBe(RID);
-  });
 });
 
 // ===========================================================================
@@ -405,106 +349,6 @@ describe("L7 tracestate forwarding (W3C §3.3)", () => {
 });
 
 describe("L7 outbound headers", () => {
-  it("snapshots every outbound field once", () => {
-    const reads = new Map<string, number>();
-    const changing = <Value>(name: string, first: Value, later: Value) => {
-      const count = (reads.get(name) ?? 0) + 1;
-      reads.set(name, count);
-      return count === 1 ? first : later;
-    };
-    const correlation = {
-      get trace_id() {
-        return changing("trace_id", TRACE, "forged-trace");
-      },
-      get span_id() {
-        return changing("span_id", PARENT_SPAN, "forged-span");
-      },
-      get trace_flags() {
-        return changing("trace_flags", 1 as const, 0 as const);
-      },
-      get request_id() {
-        return changing("request_id", RID, "forged-request");
-      },
-      get tracestate() {
-        return changing("tracestate", undefined, "forged=state");
-      },
-    };
-
-    expect(outboundCorrelationHeaders(correlation)).toEqual({
-      [TRACEPARENT_HEADER]: `00-${TRACE}-${PARENT_SPAN}-01`,
-      [CAIL_REQUEST_ID_HEADER]: RID,
-    });
-    expect(Object.fromEntries(reads)).toEqual({
-      trace_id: 1,
-      span_id: 1,
-      trace_flags: 1,
-      request_id: 1,
-      tracestate: 1,
-    });
-  });
-
-  it("rejects coercible outbound identifiers without coercion", () => {
-    for (const field of ["trace_id", "span_id", "request_id"] as const) {
-      let coercions = 0;
-      const coercible = {
-        [Symbol.toPrimitive]() {
-          coercions += 1;
-          return field === "trace_id"
-            ? TRACE
-            : field === "span_id"
-              ? PARENT_SPAN
-              : RID;
-        },
-      };
-      const correlation = {
-        trace_id: TRACE,
-        span_id: PARENT_SPAN,
-        trace_flags: 1,
-        request_id: RID,
-        [field]: coercible,
-      };
-
-      // SAFETY: each coercible object intentionally bypasses CailCorrelation to
-      // prove validation never invokes caller-controlled coercion hooks.
-      expect(() =>
-        outboundCorrelationHeaders(correlation as never),
-      ).toThrow(TypeError);
-      expect(coercions).toBe(0);
-    }
-  });
-
-  it("contains hostile outbound correlation access and reflection", () => {
-    const sentinel = "private-correlation-sentinel";
-    const hostileValues = [
-      {
-        get trace_id(): never {
-          throw new Error(sentinel);
-        },
-      },
-      new Proxy(
-        {},
-        {
-          getPrototypeOf() {
-            throw new Error(sentinel);
-          },
-        },
-      ),
-    ];
-
-    for (const correlation of hostileValues) {
-      let thrown: unknown;
-      try {
-        // SAFETY: hostile objects intentionally bypass CailCorrelation to prove
-        // reflection errors are contained and redacted.
-        outboundCorrelationHeaders(correlation as never);
-      } catch (error) {
-        thrown = error;
-      }
-      expect(thrown).toBeInstanceOf(TypeError);
-      expect(String(thrown)).not.toContain(sentinel);
-    }
-  });
-
   it("L7j outbound traceparent forwards the trace with OUR span as parent-id", () => {
     const c: CailCorrelation = {
       trace_id: TRACE,
@@ -559,5 +403,32 @@ describe("L7 outbound headers", () => {
       ).toThrow(TypeError);
     }
     expect(() => outboundCorrelationHeaders(good)).not.toThrow();
+  });
+});
+
+describe("request-ID field contract", () => {
+  it("keeps action IDs UUIDv4-only when request IDs accept UUIDv7", () => {
+    const events: unknown[] = [];
+    const diagnostics: string[] = [];
+    const logger = createCailLogger({
+      service: "kale-release-control-plane",
+      release: "fa12fe8",
+      env: "test",
+      sourceClass: "platform",
+      subjectVersion: "v1",
+      catalog: CAIL_EVENT_CATALOG,
+      sink: (event) => { events.push(event); },
+      onDiagnostic: (code) => { diagnostics.push(code); },
+    });
+
+    logger.emit(CAIL_EVENTS.ACTION_ADMITTED, {
+      action_id: UUID_V7,
+      request_id: UUID_V7,
+      product_id: "kale-deploy",
+      principal: { type: "service" },
+    });
+
+    expect(events).toEqual([]);
+    expect(diagnostics).toEqual(["event_contract_error"]);
   });
 });

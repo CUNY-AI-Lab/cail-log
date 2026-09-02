@@ -31,17 +31,14 @@ import {
 } from "./schema.js";
 import {
   assertValidatedEvent,
-  markValidatedEvent,
-} from "./event-provenance.js";
-import { isSensitive } from "./sensitive.js";
-import { containsSecretToken } from "./secret-pattern.js";
-import { TERMINAL_REASONS } from "./terminal-reasons.js";
-import {
   callableFrom,
+  containsSecretToken,
+  markValidatedEvent,
   numberFrom,
   plainRecordFrom,
   stringFrom,
-} from "./validation.js";
+  TERMINAL_REASONS,
+} from "./internal.js";
 
 export type CailLogDiagnosticCode =
   | "clock_error"
@@ -197,18 +194,6 @@ type FieldDefinition = readonly [output: keyof CailLogAttributes, clean: Sanitiz
 type MutableCailLogEvent = {
   -readonly [Key in keyof CailLogEvent]: CailLogEvent[Key];
 };
-type CailLoggerOptionsSnapshot = Readonly<{
-  service: unknown;
-  release: unknown;
-  env: unknown;
-  sourceClass: unknown;
-  subjectVersion: unknown;
-  catalog: unknown;
-  sink: unknown;
-  onDiagnostic: unknown;
-  clock: unknown;
-}>;
-
 const ENVIRONMENTS: ReadonlySet<string> = new Set([
   "production",
   "staging",
@@ -216,34 +201,13 @@ const ENVIRONMENTS: ReadonlySet<string> = new Set([
   "test",
 ]);
 const SOURCE_CLASSES: ReadonlySet<string> = new Set(["platform", "tenant"]);
-const KNOWN_FIELDS: ReadonlySet<string> = new Set(CAIL_PLATFORM_FIELD_NAMES);
-
-function snapshotLoggerOptions<Value>(options: Value): CailLoggerOptionsSnapshot {
-  try {
-    const parsed = plainRecordFrom(options);
-    if (parsed === undefined) {
-      throw new TypeError("invalid logger options");
-    }
-    const fields = parsed;
-    return Object.freeze({
-      service: fields.read("service"),
-      release: fields.read("release"),
-      env: fields.read("env"),
-      sourceClass: fields.read("sourceClass"),
-      subjectVersion: fields.read("subjectVersion"),
-      catalog: fields.read("catalog"),
-      sink: fields.read("sink"),
-      onDiagnostic: fields.read("onDiagnostic"),
-      clock: fields.read("clock"),
-    });
-  } catch {
-    throw new TypeError("cail-log: options must be a readable plain object");
-  }
-}
+const KNOWN_FIELDS: ReadonlySet<CailPlatformLogFieldName> = new Set(
+  CAIL_PLATFORM_FIELD_NAMES,
+);
 
 function sanitizePattern<Value>(value: Value, pattern: RegExp): string | undefined {
   const text = stringFrom(value);
-  if (text === undefined || isSensitive(value)) return undefined;
+  if (text === undefined) return undefined;
   if (containsSecretToken(text)) return undefined;
   return pattern.test(text) ? text : undefined;
 }
@@ -661,17 +625,15 @@ export function createCailLogger<
 >(
   options: CailLoggerOptions<Catalog, Source>,
 ): CailLogger<Catalog, Source> {
-  const configured = snapshotLoggerOptions(options);
-
-  const service = sanitizePattern(configured.service, SLUG_RE);
-  const release = sanitizePattern(configured.release, MACHINE_ID_RE);
+  const service = sanitizePattern(options.service, SLUG_RE);
+  const release = sanitizePattern(options.release, MACHINE_ID_RE);
   if (service === undefined) {
     throw new TypeError("cail-log: service must be a slug");
   }
   if (release === undefined) {
     throw new TypeError("cail-log: release must be a machine identifier");
   }
-  const configuredEnvironment = stringFrom(configured.env);
+  const configuredEnvironment = stringFrom(options.env);
   if (
     configuredEnvironment === undefined ||
     !ENVIRONMENTS.has(configuredEnvironment)
@@ -680,7 +642,7 @@ export function createCailLogger<
       "cail-log: env must be production, staging, development, or test",
     );
   }
-  const configuredSourceClass = stringFrom(configured.sourceClass);
+  const configuredSourceClass = stringFrom(options.sourceClass);
   if (
     configuredSourceClass === undefined ||
     !SOURCE_CLASSES.has(configuredSourceClass)
@@ -692,7 +654,7 @@ export function createCailLogger<
   // SAFETY: membership in the closed source-class set was established above.
   const sourceClass = configuredSourceClass as CailSourceClass;
   const subjectVersion = sanitizePattern(
-    configured.subjectVersion,
+    options.subjectVersion,
     SUBJECT_VERSION_RE,
   );
   if (sourceClass === "platform" && subjectVersion === undefined) {
@@ -702,45 +664,45 @@ export function createCailLogger<
   }
   if (
     sourceClass === "tenant" &&
-    configured.subjectVersion !== undefined
+    options.subjectVersion !== undefined
   ) {
     throw new TypeError(
       "cail-log: tenant loggers must not configure a subjectVersion",
     );
   }
-  if (callableFrom(configured.sink) === undefined) {
+  if (callableFrom(options.sink) === undefined) {
     throw new TypeError("cail-log: sink must be an explicit function");
   }
   if (
-    configured.clock !== undefined &&
-    callableFrom(configured.clock) === undefined
+    options.clock !== undefined &&
+    callableFrom(options.clock) === undefined
   ) {
     throw new TypeError("cail-log: clock must be a function");
   }
   if (
-    configured.onDiagnostic !== undefined &&
-    callableFrom(configured.onDiagnostic) === undefined
+    options.onDiagnostic !== undefined &&
+    callableFrom(options.onDiagnostic) === undefined
   ) {
     throw new TypeError("cail-log: onDiagnostic must be a function");
   }
 
-  if (!isDefinedEventCatalog(configured.catalog)) {
+  if (!isDefinedEventCatalog(options.catalog)) {
     throw new TypeError(
       "cail-log: catalog must come from defineEventCatalog, extendCailEventCatalog, or CAIL_EVENT_CATALOG",
     );
   }
   // SAFETY: isDefinedEventCatalog established provenance and the generic
   // options contract preserves the caller's exact catalog type.
-  const catalog = configured.catalog as Catalog;
+  const catalog = options.catalog as Catalog;
   // SAFETY: callableFrom established a callable value and the options contract
   // supplies its event signature.
-  const sink = configured.sink as CailLogSink;
+  const sink = options.sink as CailLogSink;
   // SAFETY: callableFrom established the optional clock's callability; the
   // options contract owns its zero-argument numeric result.
-  const clock = (configured.clock as (() => number) | undefined) ?? Date.now;
+  const clock = (options.clock as (() => number) | undefined) ?? Date.now;
   // SAFETY: callableFrom established the optional diagnostic sink's
   // callability; the options contract owns its diagnostic signature.
-  const onDiagnostic = configured.onDiagnostic as
+  const onDiagnostic = options.onDiagnostic as
     | CailLogDiagnosticSink
     | undefined;
   const context: LoggerContext = {

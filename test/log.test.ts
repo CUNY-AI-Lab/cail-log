@@ -125,16 +125,6 @@ describe("strict field behavior", () => {
     expect(valid.events).toHaveLength(1);
   });
 
-  it("contains hostile field getters", () => {
-    const { diagnostics, events, logger } = capture();
-    logger.emit(CAIL_EVENTS.ACTION_ADMITTED, {
-      ...actionFields(),
-      get request_id(): string { throw new Error("student essay"); },
-    });
-    expect(events).toEqual([]);
-    expect(diagnostics).toEqual(["event_dropped"]);
-  });
-
   it("does not evaluate or suppress an event for an unknown hostile getter", () => {
     const { diagnostics, events, logger } = capture();
     let reads = 0;

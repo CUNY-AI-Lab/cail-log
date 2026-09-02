@@ -1,11 +1,11 @@
 import type { CailLogAttributeValue, CailLogEvent } from "./schema.js";
 import type { CailLogSink } from "./logger.js";
-import { assertValidatedEvent } from "./event-provenance.js";
 import {
+  assertValidatedEvent,
   callableFrom,
   numberFrom,
   stringFrom,
-} from "./validation.js";
+} from "./internal.js";
 
 export const CAIL_ANALYTICS_ENGINE_DATASET = "cail_fleet_events_v1" as const;
 export const CAIL_ANALYTICS_ENGINE_SCHEMA_VERSION = 1 as const;
