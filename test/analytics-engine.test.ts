@@ -113,7 +113,7 @@ describe("Analytics Engine projection", () => {
       .toBe(CAIL_ANALYTICS_ENGINE_MISSING_NUMBER);
   });
 
-  it("projects independently observed model timing facts into reserved doubles", () => {
+  it("projects model timings into the published dataset positions", () => {
     const event = modelTerminalEvent({
       upstream_headers_ms: 125.5,
       upstream_first_data_ms: 250.25,
@@ -124,14 +124,13 @@ describe("Analytics Engine projection", () => {
       "cail.model.upstream.headers_ms": 125.5,
       "cail.model.upstream.first_data_ms": 250.25,
     });
-    expect(point.doubles[CAIL_ANALYTICS_ENGINE_DOUBLES.upstream_headers_ms - 1])
-      .toBe(125.5);
-    expect(point.doubles[CAIL_ANALYTICS_ENGINE_DOUBLES.upstream_first_data_ms - 1])
-      .toBe(250.25);
-    expect(point.doubles[CAIL_ANALYTICS_ENGINE_DOUBLES.reserved_6 - 1])
-      .toBe(CAIL_ANALYTICS_ENGINE_MISSING_NUMBER);
-    expect(point.doubles[CAIL_ANALYTICS_ENGINE_DOUBLES.reserved_11 - 1])
-      .toBe(CAIL_ANALYTICS_ENGINE_MISSING_NUMBER);
+    // Literal positions guard the stored-data contract independently of the
+    // constants used by current readers.
+    expect(point.doubles[4]).toBe(321);
+    expect(point.doubles[5]).toBe(-1);
+    expect(point.doubles[10]).toBe(-1);
+    expect(point.doubles[13]).toBe(125.5);
+    expect(point.doubles[14]).toBe(250.25);
   });
 
   it("keeps timing omission distinct from an observed zero", () => {
