@@ -48,6 +48,10 @@ export const CAIL_ANALYTICS_ENGINE_DOUBLES = Object.freeze({
   reserved_11: 11,
   retry_count: 12,
   event_timestamp_ms: 13,
+  // Positions 6 and 11 remain reserved for historical compatibility. These
+  // timing facts use the first previously unused positions.
+  upstream_headers_ms: 14,
+  upstream_first_data_ms: 15,
 } as const);
 
 export interface CailAnalyticsEngineDataPoint {
@@ -130,8 +134,8 @@ export function toAnalyticsEngineDataPoint(
       Number.isFinite(eventTimestamp)
         ? eventTimestamp
         : CAIL_ANALYTICS_ENGINE_MISSING_NUMBER,
-      CAIL_ANALYTICS_ENGINE_MISSING_NUMBER,
-      CAIL_ANALYTICS_ENGINE_MISSING_NUMBER,
+      numberAttribute(attributes, "cail.model.upstream.headers_ms"),
+      numberAttribute(attributes, "cail.model.upstream.first_data_ms"),
       CAIL_ANALYTICS_ENGINE_MISSING_NUMBER,
       CAIL_ANALYTICS_ENGINE_MISSING_NUMBER,
       CAIL_ANALYTICS_ENGINE_MISSING_NUMBER,

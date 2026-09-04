@@ -205,10 +205,13 @@ purpose. The choice belongs in deployment configuration, not this package.
 
 ### Fleet analytics projection
 
-Cloudflare Workers Logs is a short-lived diagnostic surface and does not expose
-a programmatic query API for the fleet console's aggregate trends. The optional
-Analytics Engine projection writes the same accepted event to the versioned
-`cail_fleet_events_v1` dataset:
+Cloudflare [Workers Logs](https://developers.cloudflare.com/workers/observability/logs/workers-logs/)
+is a short-lived diagnostic surface. It can be queried in the Workers
+dashboard, and Cloudflare exposes a Workers Observability
+telemetry query API through
+[`POST /accounts/{account_id}/workers/observability/telemetry/query`](https://developers.cloudflare.com/api/resources/workers/subresources/observability/subresources/telemetry/methods/query/).
+The optional Analytics Engine projection writes the same accepted event to the
+versioned `cail_fleet_events_v1` dataset:
 
 ```ts
 import {
@@ -235,8 +238,9 @@ sampling boundary.
 The fleet projection intentionally omits stable user pseudonyms, per-event
 UUIDs, and settled usage facts. Model-limit state and Sandbox allocation come
 from their authoritative accounting APIs. The aggregate projection retains the
-privacy-safer cohort. Unused blob and double positions remain reserved for
-future schema growth.
+privacy-safer cohort. Historical double positions 6 and 11 remain reserved;
+the two model timing observations use previously unused positions 14 and 15.
+Other unused blob and double positions remain reserved for future schema growth.
 
 Analytics Engine is diagnostic only. It may sample, retains data for its native
 platform window, and cannot replace authoritative product state, model
@@ -274,6 +278,9 @@ conventions when one exists.
 | `terminal.outcome` | `cail.outcome` | both |
 | `terminal.reason` | `cail.outcome.reason` | both |
 | `error_type` | `error.type` | both |
+| `duration_ms` | `cail.operation.duration_ms` | both |
+| `upstream_headers_ms` | `cail.model.upstream.headers_ms` | platform |
+| `upstream_first_data_ms` | `cail.model.upstream.first_data_ms` | platform |
 | `req_bytes` | `http.request.body.size` | both |
 | `principal.type` | `cail.principal.type` | platform |
 | `principal.subject` | `enduser.pseudo.id` | platform |
@@ -343,6 +350,13 @@ fields.
   millionths of one US dollar. It carries no cost source or quality and is not
   an accounting adjustment or charge authority.
 - `duration_ms` is finite, nonnegative milliseconds and may be fractional.
+- `upstream_headers_ms` and `upstream_first_data_ms` are optional finite,
+  nonnegative millisecond observations for `cail.model.call.terminal`. Both
+  use the same actual upstream fetch start: headers end when the fetch
+  resolves, while first data ends at the first nonempty response bytes, not
+  the first semantic model token. They are omitted when unobserved and may be
+  zero when measured at zero; `duration_ms` remains the admission-to-terminal
+  total.
   Retry counts, byte counts, token counts, money, and settled usage quantities
   must be safe integers.
 - Settled Sandbox usage is exact integer MiB-milliseconds from the trusted

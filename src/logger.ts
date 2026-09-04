@@ -309,6 +309,8 @@ const PLATFORM_FIELD_DEFS: Readonly<Record<string, FieldDefinition>> = Object.fr
   provider: ["gen_ai.provider.name", (value) => sanitizePattern(value, SLUG_RE)],
   request_model: ["gen_ai.request.model", (value) => sanitizePattern(value, MODEL_ID_RE)],
   response_model: ["gen_ai.response.model", (value) => sanitizePattern(value, MODEL_ID_RE)],
+  upstream_headers_ms: ["cail.model.upstream.headers_ms", sanitizeDuration],
+  upstream_first_data_ms: ["cail.model.upstream.first_data_ms", sanitizeDuration],
   input_tokens: ["gen_ai.usage.input_tokens", sanitizeCounter],
   output_tokens: ["gen_ai.usage.output_tokens", sanitizeCounter],
   cost_micro_usd: ["cail.gen_ai.cost.micro_usd", sanitizeCounter],

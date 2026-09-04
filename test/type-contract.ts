@@ -36,6 +36,19 @@ platform.emit(CAIL_EVENTS.ACTION_TERMINAL, {
   error_type: undefined,
 });
 
+platform.emit(CAIL_EVENTS.MODEL_CALL_TERMINAL, {
+  call_id: "b47399d2-d0cb-4cb2-a7c0-5a15ced5bace",
+  action_id: "9f50d4a4-ef70-41b2-b225-0a5cbf2df5e7",
+  product_id: "kale-workbench",
+  principal: { type: "anonymous" },
+  provider: "openai",
+  request_model: "gpt-5",
+  terminal: { outcome: "ok", reason: "completed" },
+  duration_ms: 1,
+  upstream_headers_ms: 0,
+  upstream_first_data_ms: 12.5,
+});
+
 const tenantCatalog = defineEventCatalog({
   "tenant.ready": {
     source: "tenant",
