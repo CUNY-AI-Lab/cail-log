@@ -150,10 +150,14 @@ service-local event, not the canonical settled event.
 
 Byte, token, micro-USD cost, retry, and usage fields are nonnegative safe
 integers. Durations are finite nonnegative milliseconds and may be fractional.
-Omission means unknown; zero means measured zero. Request bytes are payload-body
-bytes excluding headers. Token totals include cached input and reasoning output
-when the provider reports those components. Observed model cost is diagnostic
-and never an accounting adjustment.
+`upstream_headers_ms` and `upstream_first_data_ms` are optional terminal-model
+durations measured from the same actual upstream fetch start: headers end when
+the fetch resolves, and first data ends at the first nonempty response bytes,
+not the first semantic model token. Omission means unknown; zero means measured
+zero. `duration_ms` remains the owner admission-to-terminal total. Request bytes
+are payload-body bytes excluding headers. Token totals include cached input and
+reasoning output when the provider reports those components. Observed model cost
+is diagnostic and never an accounting adjustment.
 
 Analytics Engine uses `-1` for missing nonnegative numeric values. Queries must
 exclude that sentinel rather than treating it as zero.
@@ -168,8 +172,9 @@ Analytics Engine dataset `cail_fleet_events_v1` has its own projection schema
 version 1. Blob and double positions are append-only and exported as one-based
 constants. The point index is environment plus trusted product ID, with a
 namespaced service fallback. Stable user pseudonyms, per-event UUIDs, and
-settled usage are deliberately omitted. Reserved positions remain empty for
-future schema growth. The generic `route` input maps to `url.template`.
+settled usage are deliberately omitted. Historical positions 6 and 11 remain
+reserved; model timing observations use previously unused double positions 14
+and 15. The generic `route` input maps to `url.template`.
 
 Analytics Engine is sampled diagnostic storage. Weighted aggregate queries
 must use `_sample_interval` and expose sampling evidence. It cannot prove

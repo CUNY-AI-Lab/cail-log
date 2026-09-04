@@ -163,6 +163,30 @@ describe("strict field behavior", () => {
     expect(events).toHaveLength(1);
     expect(diagnostics).toEqual([]);
   });
+
+  it("rejects events with non-finite and negative model timing observations", () => {
+    for (const field of [
+      "upstream_headers_ms",
+      "upstream_first_data_ms",
+    ] as const) {
+      for (const value of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
+        const { diagnostics, events, logger } = capture();
+        logger.emit(CAIL_EVENTS.MODEL_CALL_TERMINAL, {
+          call_id: "b47399d2-d0cb-4cb2-a7c0-5a15ced5bace",
+          action_id: ACTION_ID,
+          product_id: "agent-studio",
+          principal: { type: "anonymous" },
+          provider: "openai",
+          request_model: "gpt-5",
+          terminal: { outcome: "ok", reason: "completed" },
+          duration_ms: 1,
+          [field]: value,
+        });
+        expect(events).toEqual([]);
+        expect(diagnostics).toEqual(["event_contract_error"]);
+      }
+    }
+  });
 });
 
 describe("explicit sinks and derived severity", () => {

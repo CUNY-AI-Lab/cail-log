@@ -88,6 +88,8 @@ describe("OpenTelemetry-aligned record", () => {
       response_model: "gpt-5-2026-06-01",
       terminal: { outcome: "ok", reason: "completed" },
       duration_ms: 500,
+      upstream_headers_ms: 125.5,
+      upstream_first_data_ms: 250.25,
       input_tokens: 250,
       output_tokens: 40,
       cost_micro_usd: 137,
@@ -99,6 +101,12 @@ describe("OpenTelemetry-aligned record", () => {
       "gen_ai.usage.input_tokens": 250,
       "gen_ai.usage.output_tokens": 40,
       "cail.gen_ai.cost.micro_usd": 137,
+      "cail.model.upstream.headers_ms": 125.5,
+      "cail.model.upstream.first_data_ms": 250.25,
+    });
+    expect(toWorkersLogEvent(events[0]!)).toMatchObject({
+      "cail.model.upstream.headers_ms": 125.5,
+      "cail.model.upstream.first_data_ms": 250.25,
     });
   });
 });

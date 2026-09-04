@@ -16,6 +16,7 @@ import {
 } from "../src/index.js";
 
 const ACTION_ID = "9f50d4a4-ef70-41b2-b225-0a5cbf2df5e7";
+const CALL_ID = "b47399d2-d0cb-4cb2-a7c0-5a15ced5bace";
 const SUBJECT = "cail-v1-0123456789abcdef0123456789abcdef";
 
 function terminalEvent(
@@ -41,6 +42,37 @@ function terminalEvent(
     terminal: { outcome: "error", reason: "application_failure" },
     duration_ms: 321,
     error_type: "agent_failed",
+  });
+  return captured!;
+}
+
+function modelTerminalEvent(
+  timings: Readonly<{
+    upstream_headers_ms?: number;
+    upstream_first_data_ms?: number;
+  }> = {},
+): CailLogEvent {
+  let captured: CailLogEvent | undefined;
+  const logger = createCailLogger({
+    service: "model-proxy",
+    release: "abc123",
+    env: "production",
+    sourceClass: "platform",
+    subjectVersion: "v1",
+    catalog: CAIL_EVENT_CATALOG,
+    sink: (event) => { captured = event; },
+    clock: () => Date.parse("2026-07-13T20:00:00.000Z"),
+  });
+  logger.emit(CAIL_EVENTS.MODEL_CALL_TERMINAL, {
+    call_id: CALL_ID,
+    action_id: ACTION_ID,
+    product_id: "agent-studio",
+    principal: { type: "anonymous" },
+    provider: "openai",
+    request_model: "gpt-5",
+    terminal: { outcome: "ok", reason: "completed" },
+    duration_ms: 321,
+    ...timings,
   });
   return captured!;
 }
@@ -79,6 +111,44 @@ describe("Analytics Engine projection", () => {
       .toBe(CAIL_ANALYTICS_ENGINE_MISSING_NUMBER);
     expect(point.doubles[CAIL_ANALYTICS_ENGINE_DOUBLES.cost_micro_usd - 1])
       .toBe(CAIL_ANALYTICS_ENGINE_MISSING_NUMBER);
+  });
+
+  it("projects independently observed model timing facts into reserved doubles", () => {
+    const event = modelTerminalEvent({
+      upstream_headers_ms: 125.5,
+      upstream_first_data_ms: 250.25,
+    });
+    const point = toAnalyticsEngineDataPoint(event);
+
+    expect(event.attributes).toMatchObject({
+      "cail.model.upstream.headers_ms": 125.5,
+      "cail.model.upstream.first_data_ms": 250.25,
+    });
+    expect(point.doubles[CAIL_ANALYTICS_ENGINE_DOUBLES.upstream_headers_ms - 1])
+      .toBe(125.5);
+    expect(point.doubles[CAIL_ANALYTICS_ENGINE_DOUBLES.upstream_first_data_ms - 1])
+      .toBe(250.25);
+    expect(point.doubles[CAIL_ANALYTICS_ENGINE_DOUBLES.reserved_6 - 1])
+      .toBe(CAIL_ANALYTICS_ENGINE_MISSING_NUMBER);
+    expect(point.doubles[CAIL_ANALYTICS_ENGINE_DOUBLES.reserved_11 - 1])
+      .toBe(CAIL_ANALYTICS_ENGINE_MISSING_NUMBER);
+  });
+
+  it("keeps timing omission distinct from an observed zero", () => {
+    const missing = toAnalyticsEngineDataPoint(modelTerminalEvent());
+    const zero = toAnalyticsEngineDataPoint(modelTerminalEvent({
+      upstream_headers_ms: 0,
+      upstream_first_data_ms: 0,
+    }));
+
+    expect(missing.doubles[CAIL_ANALYTICS_ENGINE_DOUBLES.upstream_headers_ms - 1])
+      .toBe(CAIL_ANALYTICS_ENGINE_MISSING_NUMBER);
+    expect(missing.doubles[CAIL_ANALYTICS_ENGINE_DOUBLES.upstream_first_data_ms - 1])
+      .toBe(CAIL_ANALYTICS_ENGINE_MISSING_NUMBER);
+    expect(zero.doubles[CAIL_ANALYTICS_ENGINE_DOUBLES.upstream_headers_ms - 1])
+      .toBe(0);
+    expect(zero.doubles[CAIL_ANALYTICS_ENGINE_DOUBLES.upstream_first_data_ms - 1])
+      .toBe(0);
   });
 
   it("writes one point through an explicit dataset sink", () => {

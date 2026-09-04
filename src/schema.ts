@@ -135,6 +135,8 @@ export interface CailPlatformLogFields extends CailTenantLogFields {
   provider?: string;
   request_model?: string;
   response_model?: string;
+  upstream_headers_ms?: number;
+  upstream_first_data_ms?: number;
   input_tokens?: number;
   output_tokens?: number;
   cost_micro_usd?: number;
@@ -179,6 +181,8 @@ export type CailLogAttributes = Readonly<{
   "gen_ai.provider.name"?: string;
   "gen_ai.request.model"?: string;
   "gen_ai.response.model"?: string;
+  "cail.model.upstream.headers_ms"?: number;
+  "cail.model.upstream.first_data_ms"?: number;
   "gen_ai.usage.input_tokens"?: number;
   "gen_ai.usage.output_tokens"?: number;
   "cail.gen_ai.cost.micro_usd"?: number;
@@ -319,6 +323,8 @@ export const CAIL_PLATFORM_ONLY_FIELD_NAMES = Object.freeze([
   "provider",
   "request_model",
   "response_model",
+  "upstream_headers_ms",
+  "upstream_first_data_ms",
   "input_tokens",
   "output_tokens",
   "cost_micro_usd",
@@ -700,7 +706,7 @@ export const CAIL_EVENT_CATALOG = buildEventCatalog({
   [CAIL_EVENTS.MODEL_CALL_TERMINAL]: {
     body: "Model call reached a terminal state.", source: "platform", severity: "outcome",
     required: ["call_id", "action_id", "product_id", "principal", "provider", "request_model", "terminal", "duration_ms"],
-    optional: ["request_id", "trace", "cohort", "response_model", "input_tokens", "output_tokens", "cost_micro_usd", "status", "error_type", "retry_count"],
+    optional: ["request_id", "trace", "cohort", "response_model", "upstream_headers_ms", "upstream_first_data_ms", "input_tokens", "output_tokens", "cost_micro_usd", "status", "error_type", "retry_count"],
   },
   [CAIL_EVENTS.SANDBOX_USAGE_SETTLED]: {
     body: "Sandbox usage settled.", source: "platform", severity: "info",
