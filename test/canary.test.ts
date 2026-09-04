@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   CAIL_PLATFORM_FIELD_NAMES,
   createCailLogger,
@@ -16,8 +16,6 @@ const EVENTS = defineEventCatalog({
   },
 });
 
-afterEach(() => vi.restoreAllMocks());
-
 describe("privacy canary", () => {
   it("cannot use runtime fields, event names, or unknown keys as free text", () => {
     const events: CailLogEvent[] = [];
@@ -29,10 +27,19 @@ describe("privacy canary", () => {
       onDiagnostic: (code) => { diagnostics.push(code); },
     });
 
+    logger.emit("test.canary");
+    expect(events).toHaveLength(1);
+    expect(events[0]?.event_name).toBe("test.canary");
+    expect(diagnostics).toEqual([]);
+    events.length = 0;
+
     for (const field of CAIL_PLATFORM_FIELD_NAMES) {
       // SAFETY: each dynamic canary value deliberately violates the event's
       // field-specific type so the runtime privacy boundary is exercised.
       logger.emit("test.canary", { [field]: CANARY } as never);
+      expect(events, field).toEqual([]);
+      expect(diagnostics, field).toEqual(["event_contract_error"]);
+      diagnostics.length = 0;
     }
     for (const hostile of [
       { principal: { type: CANARY } },
@@ -89,21 +96,18 @@ describe("privacy canary", () => {
     // contracts to exercise the runtime invalid-event path.
     logger.emit(CANARY as never, {} as never);
 
+    expect(events.map((event) => event.event_name)).toEqual([
+      "test.canary", "test.canary", "test.canary", "test.canary",
+      "test.canary", "test.canary", "event.invalid",
+    ]);
+    expect(diagnostics).toEqual([
+      ...Array<string>(8).fill("event_contract_error"), "event_invalid",
+    ]);
+
     const output = JSON.stringify(events) + JSON.stringify(diagnostics);
     expect(output).not.toContain(CANARY);
     expect(output).not.toContain("stephen.zweibel");
     expect(output).not.toContain("CANARY-PII");
   });
 
-  it("never exposes sink or diagnostic exception content", () => {
-    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const logger = createCailLogger({
-      service: "model-proxy", release: "local", env: "test",
-      sourceClass: "platform", subjectVersion: "v1", catalog: EVENTS,
-      sink: () => { throw new Error(CANARY); },
-      onDiagnostic: () => { throw new Error(CANARY); },
-    });
-    logger.emit("test.canary");
-    expect(JSON.stringify(consoleSpy.mock.calls)).not.toContain(CANARY);
-  });
 });

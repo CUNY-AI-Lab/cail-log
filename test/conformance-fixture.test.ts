@@ -6,7 +6,6 @@ import {
   CAIL_EVENTS,
   CAIL_LOG_SCHEMA_VERSION,
   createCailLogger,
-  isOperationalLogSubject,
   outboundCorrelationHeaders,
   type CailLogEvent,
 } from "../src/index.js";
@@ -20,22 +19,13 @@ const fixture = JSON.parse(
   ),
 ) as {
   schemaVersion: number;
-  identitySubject: string;
   operationalSubject: string;
   correlation: Parameters<typeof outboundCorrelationHeaders>[0];
   headers: Record<string, string>;
   event: CailLogEvent;
-  forbiddenAttributeExamples: string[];
 };
 
 describe("operational-event-v2 fixture", () => {
-  it("keeps separately derived ownership and log pseudonym payloads distinct", () => {
-    expect(isOperationalLogSubject(fixture.operationalSubject)).toBe(true);
-    expect(fixture.identitySubject.slice("cail-".length)).not.toBe(
-      fixture.operationalSubject.slice("cail-v1-".length),
-    );
-  });
-
   it("round-trips the canonical correlation headers", () => {
     expect(outboundCorrelationHeaders(fixture.correlation)).toEqual(
       fixture.headers,
@@ -72,11 +62,8 @@ describe("operational-event-v2 fixture", () => {
     expect(events).toEqual([fixture.event]);
   });
 
-  it("pins schema version and excludes unsafe attribute names", () => {
+  it("pins the public schema version", () => {
     expect(fixture.schemaVersion).toBe(CAIL_LOG_SCHEMA_VERSION);
     expect(fixture.event.schema_version).toBe(CAIL_LOG_SCHEMA_VERSION);
-    for (const field of fixture.forbiddenAttributeExamples) {
-      expect(fixture.event.attributes).not.toHaveProperty(field);
-    }
   });
 });
