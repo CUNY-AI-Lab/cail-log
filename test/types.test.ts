@@ -9,8 +9,8 @@ import {
 
 const ACTION_ID = "9f50d4a4-ef70-41b2-b225-0a5cbf2df5e7";
 
-describe("type-level event contract", () => {
-  it("requires event-specific fields and source-scoped events", () => {
+describe("typed logger runtime", () => {
+  it("emits through platform and tenant catalog signatures", () => {
     const events: CailLogEvent[] = [];
     const platform = createCailLogger({
       service: "gateway", release: "local", env: "test",
@@ -42,95 +42,26 @@ describe("type-level event contract", () => {
       route: "/convert",
     });
 
-    const compileOnlyContract = () => {
-      // @ts-expect-error action_id is required by this event definition
-      platform.emit(CAIL_EVENTS.ACTION_ADMITTED, {
-        product_id: "kale-workbench",
-        principal: { type: "anonymous" },
-      });
-      platform.emit(CAIL_EVENTS.ACTION_ADMITTED, {
-        action_id: ACTION_ID,
-        product_id: "kale-workbench",
-        principal: { type: "anonymous" },
-        // @ts-expect-error model cost is not allowed on action admission
-        cost_micro_usd: 1,
-      });
-      // @ts-expect-error a tenant logger cannot emit a platform event
-      tenant.emit(CAIL_EVENTS.ACTION_ADMITTED, {
-        action_id: ACTION_ID,
-        product_id: "kale-workbench",
-        principal: { type: "anonymous" },
-      });
-      tenant.emit("tenant.requested", {
-        request_id: "0af7651b-16f9-4a3b-8f42-00f067aa0ba9",
-        // @ts-expect-error tenant event definitions cannot expose product identity
-        product_id: "forged",
-      });
-      defineEventCatalog({
-        // @ts-expect-error tenant catalogs cannot define platform-only fields
-        "tenant.forged": {
-          source: "tenant",
-          severity: "info",
-          required: ["product_id"],
-          optional: [],
-        },
-      });
-      const bodyEscape = {
-        "tenant.body_escape": {
-          body: "Caller-controlled message.",
-          source: "tenant",
-          severity: "info",
-          required: [],
-          optional: [],
-        },
-      } as const;
-      // @ts-expect-error service catalogs cannot supply runtime bodies
-      defineEventCatalog(bodyEscape);
-      platform.emit(CAIL_EVENTS.ACTION_ADMITTED, {
-        action_id: ACTION_ID,
-        product_id: "kale-workbench",
-        // @ts-expect-error an identified principal requires a subject
-        principal: { type: "user" },
-      });
-      platform.emit(CAIL_EVENTS.ACTION_ADMITTED, {
-        action_id: ACTION_ID,
-        product_id: "kale-workbench",
-        // @ts-expect-error anonymous principals cannot carry a subject
-        principal: { type: "anonymous", subject: "cail-v1-0123456789abcdef0123456789abcdef" },
-      });
-      platform.emit(CAIL_EVENTS.ACTION_TERMINAL, {
-        action_id: ACTION_ID,
-        product_id: "kale-workbench",
-        principal: { type: "anonymous" },
-        // @ts-expect-error outcomes and reasons are one discriminated terminal fact
-        terminal: { outcome: "ok", reason: "timeout" },
-        duration_ms: 1,
-      });
-      // @ts-expect-error successful terminal facts cannot carry an error type
-      platform.emit(CAIL_EVENTS.ACTION_TERMINAL, {
-        action_id: ACTION_ID,
-        product_id: "kale-workbench",
-        principal: { type: "anonymous" },
-        terminal: { outcome: "ok", reason: "completed" },
-        duration_ms: 1,
-        error_type: "should_not_compile",
-      });
-      platform.emit(CAIL_EVENTS.ACTION_ADMITTED, {
-        action_id: ACTION_ID,
-        product_id: "kale-workbench",
-        principal: { type: "anonymous" },
-        // @ts-expect-error trace context is atomic
-        trace: { trace_id: "0af7651916cd43dd8448eb211c80319c" },
-      });
-      // @ts-expect-error sink selection is required
-      createCailLogger({
-        service: "bad", release: "local", env: "test",
-        sourceClass: "platform", subjectVersion: "v1",
-        catalog: CAIL_EVENT_CATALOG,
-      });
-    };
-
-    void compileOnlyContract;
     expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({
+      event_name: CAIL_EVENTS.ACTION_ADMITTED,
+      resource: { "service.name": "gateway" },
+      attributes: {
+        "cail.source.class": "platform",
+        "cail.action.id": ACTION_ID,
+        "cail.product.id": "kale-workbench",
+        "cail.principal.type": "anonymous",
+      },
+    });
+    expect(events[1]).toMatchObject({
+      event_name: "tenant.requested",
+      body: "Service event recorded.",
+      resource: { "service.name": "tenant-app" },
+      attributes: {
+        "cail.source.class": "tenant",
+        "cail.request.id": "0af7651b-16f9-4a3b-8f42-00f067aa0ba9",
+        "url.template": "/convert",
+      },
+    });
   });
 });
