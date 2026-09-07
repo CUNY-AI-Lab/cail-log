@@ -33,7 +33,6 @@ import {
   assertValidatedEvent,
   markValidatedEvent,
 } from "./event-provenance.js";
-import { isSensitive } from "./sensitive.js";
 import { containsSecretToken } from "./secret-pattern.js";
 import { TERMINAL_REASONS } from "./terminal-reasons.js";
 import {
@@ -243,7 +242,7 @@ function snapshotLoggerOptions<Value>(options: Value): CailLoggerOptionsSnapshot
 
 function sanitizePattern<Value>(value: Value, pattern: RegExp): string | undefined {
   const text = stringFrom(value);
-  if (text === undefined || isSensitive(value)) return undefined;
+  if (text === undefined) return undefined;
   if (containsSecretToken(text)) return undefined;
   return pattern.test(text) ? text : undefined;
 }
