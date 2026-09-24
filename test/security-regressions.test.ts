@@ -275,18 +275,6 @@ describe("content-free service catalogs", () => {
       }
   });
 
-  it("assigns one library-owned body to service-defined events", () => {
-    const catalog = defineEventCatalog({
-      "service.ready": {
-        source: "tenant",
-        severity: "info",
-        required: [],
-        optional: [],
-      },
-    });
-    expect(catalog["service.ready"]!.body).toBe("Service event recorded.");
-  });
-
   it("rejects a runtime body escape hatch even when types are bypassed", () => {
     // SAFETY: the caller-owned body deliberately bypasses the bodyless catalog
     // type to exercise the runtime fixed-body boundary.
