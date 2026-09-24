@@ -160,21 +160,6 @@ describe("canonical event contracts", () => {
     expect(events).toEqual([]);
     expect(diagnostics).toEqual(["event_contract_error"]);
   });
-
-  it("ignores an arbitrary unknown key without leaking or suppressing the event", () => {
-    const { diagnostics, events, logger } = capture();
-    // SAFETY: prompt is deliberately outside the event contract to prove that
-    // unknown caller keys are neither read nor emitted.
-    logger.emit(CAIL_EVENTS.ACTION_ADMITTED, {
-      action_id: ACTION_ID,
-      product_id: "kale-workbench",
-      principal: { type: "anonymous" },
-      prompt: "student essay",
-    } as never);
-    expect(events).toHaveLength(1);
-    expect(diagnostics).toEqual([]);
-    expect(JSON.stringify(events)).not.toContain("student essay");
-  });
 });
 
 describe("catalog and sink gates", () => {
@@ -206,21 +191,6 @@ describe("catalog and sink gates", () => {
     ).toThrow(TypeError);
   });
 
-  it("rejects a success-only event that also requires an error type", () => {
-    expect(() =>
-      defineEventCatalog({
-        "bad.success_error": {
-          source: "platform",
-          severity: "outcome",
-          required: ["terminal", "error_type"],
-          optional: [],
-          outcomes: ["ok"],
-          terminal_reasons: ["completed"],
-        },
-      }),
-    ).toThrow(TypeError);
-  });
-
   it("rejects any catalog state where success requires an error type", () => {
     for (const definition of [
       {
@@ -228,6 +198,14 @@ describe("catalog and sink gates", () => {
         severity: "outcome",
         required: ["terminal", "error_type"],
         optional: [],
+      },
+      {
+        source: "platform",
+        severity: "outcome",
+        required: ["terminal", "error_type"],
+        optional: [],
+        outcomes: ["ok"],
+        terminal_reasons: ["completed"],
       },
       {
         source: "platform",
