@@ -57,23 +57,22 @@ model, cohort, provider, and other machine-identifier fields.
 
 ## Install
 
-The package is published to GitHub Packages under the `@cuny-ai-lab` scope.
-Add the registry mapping to the consuming repository's `.npmrc` (resolution
-only — never commit a token):
+The package is published to the public npm registry as `@cuny-ai-lab/cail-log`.
+Install it like any npm package; no registry mapping or token is needed:
 
 ```
-@cuny-ai-lab:registry=https://npm.pkg.github.com
+bun add @cuny-ai-lab/cail-log@0.6.4
 ```
 
-Pin an exact published release, then run `bun install` with `NODE_AUTH_TOKEN`
-set in the environment to a GitHub PAT that has `read:packages` (supplied by a
-user-level `~/.npmrc` or a CI secret).
+Pin an exact published release.
 
 Maintainers publish a stable (non-prerelease) GitHub release whose `vX.Y.Z` tag
 matches `package.json`. The workflow checks out that tag, installs with the
-frozen Bun lockfile, verifies the tag's package version, runs the package
-checks, tests, type-check, build, and pack check, then publishes to GitHub
-Packages. The published package includes generated `dist` files.
+frozen Bun lockfile, verifies the tag's package version, and publishes to npm
+through trusted publishing: npm accepts the workflow's short-lived GitHub
+identity, so no npm token exists, and each release carries a provenance
+attestation. `npm publish` runs the package checks, tests, type-check, build,
+and pack check first. The published package includes generated `dist` files.
 
 ## Create a logger
 

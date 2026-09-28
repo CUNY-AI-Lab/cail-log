@@ -221,10 +221,12 @@ durable production data is changed by this repository's build or test suite.
 `bun run verify` builds generated `dist`, runs all tests, type-checks source and
 tests, and inspects the package contents. `dist` is generated at build and is
 not committed. CI installs from the frozen Bun lockfile and runs the same
-verification on pull requests and pushes to `main`. GitHub Packages publishing
-is restricted to a stable published release: the workflow checks out the
-release tag, verifies that the tag matches `package.json`, runs the package
-checks, tests, type-check, build, and pack check, and publishes with Bun.
+verification on pull requests and pushes to `main`. Publishing to the public
+npm registry is restricted to a stable published release: the workflow checks
+out the release tag, verifies that the tag matches `package.json`, and
+publishes with the npm CLI through trusted publishing (no stored token). The
+package's `prepublishOnly` runs the checks, tests, type-check, build, and pack
+check before upload.
 
 Logging is non-authoritative, so loss of a diagnostic sink does not change
 application state. Operators should alert on content-free diagnostic counts,
