@@ -4,9 +4,10 @@ import { describe, expect, it } from "vitest";
 import {
   CAIL_EVENT_CATALOG,
   CAIL_EVENTS,
-  CAIL_LOG_SCHEMA_VERSION,
   createCailLogger,
+  isOperationalLogSubject,
   outboundCorrelationHeaders,
+  type CailLogDiagnosticCode,
   type CailLogEvent,
 } from "../src/index.js";
 
@@ -18,12 +19,42 @@ const fixture = JSON.parse(
     "utf8",
   ),
 ) as {
-  schemaVersion: number;
+  identitySubject: string;
   operationalSubject: string;
   correlation: Parameters<typeof outboundCorrelationHeaders>[0];
   headers: Record<string, string>;
   event: CailLogEvent;
+  forbiddenAttributeExamples: string[];
 };
+
+function capture() {
+  const events: CailLogEvent[] = [];
+  const diagnostics: CailLogDiagnosticCode[] = [];
+  const logger = createCailLogger({
+    service: fixture.event.resource["service.name"],
+    release: fixture.event.resource["service.version"],
+    env: fixture.event.resource["deployment.environment.name"],
+    sourceClass: "platform",
+    subjectVersion: "v1",
+    catalog: CAIL_EVENT_CATALOG,
+    sink: (event) => { events.push(event); },
+    onDiagnostic: (code) => { diagnostics.push(code); },
+    clock: () => Date.parse(fixture.event.timestamp),
+  });
+  return { diagnostics, events, logger };
+}
+
+// SAFETY: the canonical fixture's exact action and product attributes are
+// asserted against the newly emitted event in each test that uses them.
+const fixtureFields = {
+  action_id: fixture.event.attributes["cail.action.id"] as string,
+  product_id: fixture.event.attributes["cail.product.id"] as string,
+  principal: {
+    type: "user",
+    subject: fixture.operationalSubject,
+  },
+  request_id: fixture.correlation.request_id,
+} as const;
 
 describe("operational-event-v2 fixture", () => {
   it("round-trips the canonical correlation headers", () => {
@@ -33,37 +64,28 @@ describe("operational-event-v2 fixture", () => {
   });
 
   it("is exactly producible through the public logger contract", () => {
-    const events: CailLogEvent[] = [];
-    const diagnostics: string[] = [];
-    const logger = createCailLogger({
-      service: fixture.event.resource["service.name"],
-      release: fixture.event.resource["service.version"],
-      env: fixture.event.resource["deployment.environment.name"],
-      sourceClass: "platform",
-      subjectVersion: "v1",
-      catalog: CAIL_EVENT_CATALOG,
-      sink: (event) => { events.push(event); },
-      onDiagnostic: (code) => { diagnostics.push(code); },
-      clock: () => Date.parse(fixture.event.timestamp),
-    });
-    // SAFETY: the canonical fixture's exact action and product attributes are
-    // asserted against the newly emitted event at the end of this test.
-    logger.emit(CAIL_EVENTS.ACTION_ADMITTED, {
-      action_id: fixture.event.attributes["cail.action.id"] as string,
-      product_id: fixture.event.attributes["cail.product.id"] as string,
-      principal: {
-        type: "user",
-        subject: fixture.operationalSubject,
-      },
-      request_id: fixture.correlation.request_id,
-    });
-
+    const { diagnostics, events, logger } = capture();
+    logger.emit(CAIL_EVENTS.ACTION_ADMITTED, fixtureFields);
     expect(diagnostics).toEqual([]);
     expect(events).toEqual([fixture.event]);
   });
 
-  it("pins the public schema version", () => {
-    expect(fixture.schemaVersion).toBe(CAIL_LOG_SCHEMA_VERSION);
-    expect(fixture.event.schema_version).toBe(CAIL_LOG_SCHEMA_VERSION);
+  it("accepts the log pseudonym and rejects the ownership subject as operational subjects", () => {
+    expect(isOperationalLogSubject(fixture.operationalSubject)).toBe(true);
+    expect(isOperationalLogSubject(fixture.identitySubject)).toBe(false);
   });
+
+  it.each(fixture.forbiddenAttributeExamples)(
+    "leaves a caller-supplied %s field out of the emitted event",
+    (name) => {
+      const { events, logger } = capture();
+      // SAFETY: the forbidden key deliberately bypasses the closed field type to
+      // prove unknown caller keys never reach the event.
+      logger.emit(CAIL_EVENTS.ACTION_ADMITTED, {
+        ...fixtureFields,
+        [name]: "private-forbidden-value",
+      } as never);
+      expect(events).toEqual([fixture.event]);
+    },
+  );
 });

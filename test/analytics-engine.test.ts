@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  CAIL_ANALYTICS_ENGINE_BLOBS,
   CAIL_ANALYTICS_ENGINE_DOUBLES,
   CAIL_ANALYTICS_ENGINE_MISSING_NUMBER,
   CAIL_EVENT_CATALOG,
@@ -12,12 +11,14 @@ import {
   fanoutSinks,
   toAnalyticsEngineDataPoint,
   type CailAnalyticsEngineDataPoint,
+  type CailLogDiagnosticCode,
   type CailLogEvent,
 } from "../src/index.js";
 
 const ACTION_ID = "9f50d4a4-ef70-41b2-b225-0a5cbf2df5e7";
 const CALL_ID = "b47399d2-d0cb-4cb2-a7c0-5a15ced5bace";
 const SUBJECT = "cail-v1-0123456789abcdef0123456789abcdef";
+const NOW_MS = 1_783_972_800_000; // 2026-07-13T20:00:00.000Z
 
 function terminalEvent(
   environment: "production" | "staging" = "production",
@@ -31,7 +32,7 @@ function terminalEvent(
     subjectVersion: "v1",
     catalog: CAIL_EVENT_CATALOG,
     sink: (event) => { captured = event; },
-    clock: () => Date.parse("2026-07-13T20:00:00.000Z"),
+    clock: () => NOW_MS,
   });
   logger.emit(CAIL_EVENTS.ACTION_TERMINAL, {
     action_id: ACTION_ID,
@@ -61,7 +62,7 @@ function modelTerminalEvent(
     subjectVersion: "v1",
     catalog: CAIL_EVENT_CATALOG,
     sink: (event) => { captured = event; },
-    clock: () => Date.parse("2026-07-13T20:00:00.000Z"),
+    clock: () => NOW_MS,
   });
   logger.emit(CAIL_EVENTS.MODEL_CALL_TERMINAL, {
     call_id: CALL_ID,
@@ -78,31 +79,38 @@ function modelTerminalEvent(
 }
 
 describe("Analytics Engine projection", () => {
-  it("uses a stable, content-free positional schema", () => {
-    const point = toAnalyticsEngineDataPoint(terminalEvent());
-    expect(point.indexes).toEqual(["production:agent-studio"]);
-    expect(point.blobs).toHaveLength(20);
-    expect(point.doubles).toHaveLength(20);
-    expect(point.blobs[CAIL_ANALYTICS_ENGINE_BLOBS.event_name - 1])
-      .toBe("cail.action.terminal");
-    expect(point.blobs[CAIL_ANALYTICS_ENGINE_BLOBS.service_name - 1])
-      .toBe("agent-studio");
-    expect(point.blobs[CAIL_ANALYTICS_ENGINE_BLOBS.product_id - 1])
-      .toBe("agent-studio");
-    expect(point.blobs[CAIL_ANALYTICS_ENGINE_BLOBS.cohort - 1])
-      .toBe("pilot-users");
-    expect(JSON.stringify(point)).not.toContain(SUBJECT);
-    expect(point.blobs.slice(15)).toEqual(Array(5).fill(""));
-    expect(point.blobs[CAIL_ANALYTICS_ENGINE_BLOBS.route - 1])
-      .toBe("/agents/{agent}/{name}");
-    expect(point.blobs[CAIL_ANALYTICS_ENGINE_BLOBS.outcome - 1])
-      .toBe("error");
-    expect(point.doubles[CAIL_ANALYTICS_ENGINE_DOUBLES.duration_ms - 1])
-      .toBe(321);
-    expect(point.doubles[CAIL_ANALYTICS_ENGINE_DOUBLES.event_timestamp_ms - 1])
-      .toBe(Date.parse("2026-07-13T20:00:00.000Z"));
-    expect(point.doubles.slice(13)).toEqual(Array(7).fill(-1));
-    expect(JSON.stringify(point)).not.toMatch(/prompt|completion|authorization|email/i);
+  it("projects an event into the published blob and double positions", () => {
+    // Literal arrays: stored rows are read by position, so a reorder must fail
+    // here even when the exported position constants move with the writer.
+    expect(toAnalyticsEngineDataPoint(terminalEvent())).toEqual({
+      indexes: ["production:agent-studio"],
+      blobs: [
+        "cail.action.terminal",
+        "agent-studio",
+        "abc123",
+        "production",
+        "agent-studio",
+        "user",
+        "pilot-users",
+        "/agents/{agent}/{name}",
+        "error",
+        "application_failure",
+        "agent_failed",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+      ],
+      doubles: [
+        1, 2, 17, -1, 321, -1, -1, -1, -1, -1, -1, -1, NOW_MS, -1, -1, -1, -1,
+        -1, -1, -1,
+      ],
+    });
   });
 
   it("represents absent numeric facts distinctly from zero", () => {
@@ -113,24 +121,15 @@ describe("Analytics Engine projection", () => {
       .toBe(CAIL_ANALYTICS_ENGINE_MISSING_NUMBER);
   });
 
-  it("projects model timings into the published dataset positions", () => {
-    const event = modelTerminalEvent({
+  it("projects model timings into the published double positions", () => {
+    const point = toAnalyticsEngineDataPoint(modelTerminalEvent({
       upstream_headers_ms: 125.5,
       upstream_first_data_ms: 250.25,
-    });
-    const point = toAnalyticsEngineDataPoint(event);
-
-    expect(event.attributes).toMatchObject({
-      "cail.model.upstream.headers_ms": 125.5,
-      "cail.model.upstream.first_data_ms": 250.25,
-    });
-    // Literal positions guard the stored-data contract independently of the
-    // constants used by current readers.
-    expect(point.doubles[4]).toBe(321);
-    expect(point.doubles[5]).toBe(-1);
-    expect(point.doubles[10]).toBe(-1);
-    expect(point.doubles[13]).toBe(125.5);
-    expect(point.doubles[14]).toBe(250.25);
+    }));
+    expect(point.doubles).toEqual([
+      1, 2, 9, -1, 321, -1, -1, -1, -1, -1, -1, -1, NOW_MS, 125.5, 250.25, -1,
+      -1, -1, -1, -1,
+    ]);
   });
 
   it("keeps timing omission distinct from an observed zero", () => {
@@ -163,7 +162,9 @@ describe("Analytics Engine projection", () => {
 
   it("contains fanout failure and reports one content-free diagnostic", async () => {
     const points: CailAnalyticsEngineDataPoint[] = [];
-    const diagnostics: string[] = [];
+    const diagnostics: CailLogDiagnosticCode[] = [];
+    let diagnosed: () => void = () => {};
+    const diagnosis = new Promise<void>((resolve) => { diagnosed = resolve; });
     const logger = createCailLogger({
       service: "agent-studio",
       release: "abc123",
@@ -177,8 +178,11 @@ describe("Analytics Engine projection", () => {
           writeDataPoint: (point) => { points.push(point); },
         }),
       ),
-      onDiagnostic: (code) => { diagnostics.push(code); },
-      clock: () => Date.parse("2026-07-13T20:00:00.000Z"),
+      onDiagnostic: (code) => {
+        diagnostics.push(code);
+        diagnosed();
+      },
+      clock: () => NOW_MS,
     });
 
     logger.emit(CAIL_EVENTS.ACTION_TERMINAL, {
@@ -191,10 +195,9 @@ describe("Analytics Engine projection", () => {
       duration_ms: 321,
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await diagnosis;
     expect(diagnostics).toEqual(["sink_error"]);
     expect(points).toHaveLength(1);
-    expect(JSON.stringify(diagnostics)).not.toContain("secret user content");
   });
 
   it("fans out after a synchronous or asynchronous sink failure", async () => {
@@ -208,10 +211,13 @@ describe("Analytics Engine projection", () => {
     expect(delivered).toEqual(["cail.action.terminal"]);
   });
 
-  it("rejects missing datasets and empty fanout configuration", () => {
+  it("rejects a dataset without writeDataPoint", () => {
     // SAFETY: the missing method is intentional invalid input for the runtime
     // dataset guard; the assertion bypasses only the compile-time interface.
     expect(() => createAnalyticsEngineSink({} as never)).toThrow(TypeError);
+  });
+
+  it("rejects an empty fanout", () => {
     expect(() => fanoutSinks()).toThrow(TypeError);
   });
 
@@ -271,6 +277,10 @@ describe("Analytics Engine projection", () => {
     expect(point.blobs).toHaveLength(20);
     expect(point.doubles).toHaveLength(20);
     expect(new TextEncoder().encode(point.blobs.join("")).byteLength).toBeLessThanOrEqual(16 * 1024);
+  });
+
+  it("falls back to a service-namespaced index within 96 bytes when no product is set", () => {
+    const service = `s${"s".repeat(63)}`;
     const tenantCatalog = defineEventCatalog({
       "test.service_only": {
         source: "tenant",
@@ -281,7 +291,7 @@ describe("Analytics Engine projection", () => {
     });
     let serviceOnly: CailLogEvent | undefined;
     const tenantLogger = createCailLogger({
-      service: `s${"s".repeat(63)}`,
+      service,
       release: "local",
       env: "production",
       sourceClass: "tenant",
@@ -289,8 +299,8 @@ describe("Analytics Engine projection", () => {
       sink: (event) => { serviceOnly = event; },
     });
     tenantLogger.emit("test.service_only");
-    const serviceFallback = toAnalyticsEngineDataPoint(serviceOnly!);
-    expect(serviceFallback.indexes[0].startsWith("production:_service.")).toBe(true);
-    expect(new TextEncoder().encode(serviceFallback.indexes[0]).byteLength).toBeLessThanOrEqual(96);
+    const { indexes } = toAnalyticsEngineDataPoint(serviceOnly!);
+    expect(indexes).toEqual([`production:_service.${service}`]);
+    expect(new TextEncoder().encode(indexes[0]).byteLength).toBeLessThanOrEqual(96);
   });
 });

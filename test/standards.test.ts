@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CAIL_EVENT_CATALOG,
   CAIL_EVENTS,
@@ -26,6 +26,8 @@ function capture() {
   });
   return { events, logger };
 }
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("OpenTelemetry-aligned record", () => {
   it("accepts the pinned semantic convention's QUERY method", () => {
@@ -76,7 +78,7 @@ describe("OpenTelemetry-aligned record", () => {
     });
   });
 
-  it("uses current GenAI attributes without recording content", () => {
+  it("maps model-call fields to current GenAI attributes", () => {
     const { events, logger } = capture();
     logger.emit(CAIL_EVENTS.MODEL_CALL_TERMINAL, {
       call_id: CALL_ID,
@@ -104,10 +106,6 @@ describe("OpenTelemetry-aligned record", () => {
       "cail.model.upstream.headers_ms": 125.5,
       "cail.model.upstream.first_data_ms": 250.25,
     });
-    expect(toWorkersLogEvent(events[0]!)).toMatchObject({
-      "cail.model.upstream.headers_ms": 125.5,
-      "cail.model.upstream.first_data_ms": 250.25,
-    });
   });
 });
 
@@ -130,25 +128,40 @@ describe("Cloudflare projection", () => {
     expect(output).not.toHaveProperty("attributes");
   });
 
-  it("uses the structured console method selected by derived severity", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const logger = createCailLogger({
-      service: "model-proxy", release: "local", env: "test",
-      sourceClass: "platform", subjectVersion: "v1",
-      catalog: CAIL_EVENT_CATALOG,
-      sink: workersStructuredSink,
-    });
-    logger.emit(CAIL_EVENTS.ACTION_TERMINAL, {
-      action_id: ACTION_ID,
-      product_id: "kale-workbench",
-      principal: { type: "anonymous" },
-      terminal: { outcome: "outcome_unknown", reason: "unknown" },
-      duration_ms: 10,
-    });
-    expect(warn.mock.calls[0]![0]).toMatchObject({
-      "event.name": "cail.action.terminal",
-      severity_number: 13,
-    });
-    vi.restoreAllMocks();
-  });
+  it.each([
+    { outcome: "ok", reason: "completed", method: "log", severity: 9 },
+    { outcome: "outcome_unknown", reason: "unknown", method: "warn", severity: 13 },
+    { outcome: "timeout", reason: "timeout", method: "error", severity: 17 },
+  ] as const)(
+    "writes a $outcome terminal event through console.$method",
+    ({ outcome, reason, method, severity }) => {
+      const spies = {
+        log: vi.spyOn(console, "log").mockImplementation(() => {}),
+        warn: vi.spyOn(console, "warn").mockImplementation(() => {}),
+        error: vi.spyOn(console, "error").mockImplementation(() => {}),
+      };
+      const logger = createCailLogger({
+        service: "model-proxy", release: "local", env: "test",
+        sourceClass: "platform", subjectVersion: "v1",
+        catalog: CAIL_EVENT_CATALOG,
+        sink: workersStructuredSink,
+      });
+      logger.emit(CAIL_EVENTS.ACTION_TERMINAL, {
+        action_id: ACTION_ID,
+        product_id: "kale-workbench",
+        principal: { type: "anonymous" },
+        // SAFETY: each row pairs an outcome with its own terminal reason.
+        terminal: { outcome, reason } as never,
+        duration_ms: 10,
+      });
+      const calls = Object.fromEntries(
+        Object.entries(spies).map(([name, spy]) => [name, spy.mock.calls.length]),
+      );
+      expect(calls).toEqual({ log: 0, warn: 0, error: 0, [method]: 1 });
+      expect(spies[method].mock.calls[0]![0]).toMatchObject({
+        "event.name": "cail.action.terminal",
+        severity_number: severity,
+      });
+    },
+  );
 });

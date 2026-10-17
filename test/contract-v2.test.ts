@@ -30,6 +30,22 @@ function capture() {
   return { diagnostics, events, logger };
 }
 
+function validOptions() {
+  return {
+    service: "kale-gateway",
+    release: "218328f",
+    env: "production" as const,
+    sourceClass: "platform" as const,
+    subjectVersion: "v1",
+    catalog: CAIL_EVENT_CATALOG,
+    sink: () => {},
+  };
+}
+
+function definition(source: string, required: readonly string[] = []) {
+  return { source, severity: "info", required, optional: [] };
+}
+
 afterEach(() => vi.restoreAllMocks());
 
 describe("schema v2 and closed event definitions", () => {
@@ -81,7 +97,7 @@ describe("schema v2 and closed event definitions", () => {
     expect(diagnostics).toEqual(["event_invalid"]);
   });
 
-  it("validates and deeply freezes catalog definitions", () => {
+  it("deeply freezes a defined catalog", () => {
     const catalog = defineEventCatalog({
       "test.ready": {
         source: "both",
@@ -93,35 +109,20 @@ describe("schema v2 and closed event definitions", () => {
     expect(Object.isFrozen(catalog)).toBe(true);
     expect(Object.isFrozen(catalog["test.ready"])).toBe(true);
     expect(Object.isFrozen(catalog["test.ready"]!.required)).toBe(true);
-    expect(() =>
-      defineEventCatalog({
-        "bad event": {
-          source: "both", severity: "info",
-          required: [], optional: [],
-        },
-      }),
-    ).toThrow(TypeError);
-    expect(() =>
-      defineEventCatalog({
-        "cail.action.terminal": {
-          source: "platform", severity: "info",
-          required: [], optional: [],
-        },
-      }),
-    ).toThrow(TypeError);
-    expect(() =>
-      // SAFETY: product_id is intentionally invalid for a tenant definition so
-      // the runtime source-field compatibility check is exercised.
-      defineEventCatalog({
-        "test.bad": {
-          source: "tenant", severity: "info",
-          required: ["product_id"], optional: [],
-        },
-      } as never),
-    ).toThrow(TypeError);
   });
 
-  it("extends the canonical catalog without permitting redefinition", () => {
+  it.each([
+    { label: "an event name with a space", catalog: { "bad event": definition("both") } },
+    { label: "the reserved cail. namespace", catalog: { "cail.action.terminal": definition("platform") } },
+    { label: "the reserved invalid-event name", catalog: { "event.invalid": definition("both") } },
+    { label: "a platform field on a tenant event", catalog: { "test.bad": definition("tenant", ["product_id"]) } },
+  ])("rejects a service catalog with $label", ({ catalog }) => {
+    // SAFETY: each row deliberately violates the runtime catalog contract; the
+    // cast bypasses only the compile-time catalog type.
+    expect(() => defineEventCatalog(catalog as never)).toThrow(TypeError);
+  });
+
+  it("extends the canonical catalog with a service event", () => {
     const catalog = extendCailEventCatalog({
       "sandbox_bridge.outbox.retried": {
         source: "platform",
@@ -148,37 +149,35 @@ describe("schema v2 and closed event definitions", () => {
     });
   });
 
-  it("fails loudly on invalid constructor context", () => {
-    const base = {
-      service: "kale-gateway",
-      release: "218328f",
-      env: "production" as const,
-      sourceClass: "platform" as const,
-      subjectVersion: "v1",
-      catalog: CAIL_EVENT_CATALOG,
-      sink: () => {},
-    };
-    expect(() => createCailLogger({ ...base, service: "Has Spaces" })).toThrow(TypeError);
-    expect(() => createCailLogger({ ...base, release: "" })).toThrow(TypeError);
-    // SAFETY: the noncanonical environment intentionally bypasses the closed
-    // options type to exercise constructor validation.
-    expect(() => createCailLogger({ ...base, env: "prod" as never })).toThrow(TypeError);
-    // SAFETY: the unknown source class intentionally bypasses the closed
-    // options type to exercise constructor validation.
+  it("rejects an extension that redefines a canonical event", () => {
     expect(() =>
-      createCailLogger({ ...base, sourceClass: "unknown" } as never),
-    ).toThrow(TypeError);
-    // SAFETY: the forged catalog intentionally lacks library provenance so the
-    // constructor's runtime provenance check is exercised.
-    expect(() => createCailLogger({
-      ...base,
-      catalog: {
-        "forged.event": {
-          source: "platform", severity: "info",
-          required: [], optional: [],
+      extendCailEventCatalog({
+        [CAIL_EVENTS.ACTION_TERMINAL]: {
+          source: "platform",
+          severity: "debug",
+          required: [],
+          optional: [],
         },
-      } as never,
-    })).toThrow(TypeError);
+      }),
+    ).toThrow(TypeError);
+  });
+
+  it.each([
+    { label: "a service that is not a slug", options: { ...validOptions(), service: "Has Spaces" } },
+    { label: "an empty release", options: { ...validOptions(), release: "" } },
+    { label: "a noncanonical environment", options: { ...validOptions(), env: "prod" } },
+    { label: "an unknown source class", options: { ...validOptions(), sourceClass: "unknown" } },
+    {
+      label: "a catalog without library provenance",
+      options: { ...validOptions(), catalog: { "forged.event": definition("platform") } },
+    },
+  ])("throws a TypeError for $label", ({ options }) => {
+    // SAFETY: each row deliberately bypasses the closed options type to exercise
+    // constructor validation at runtime.
+    expect(() => createCailLogger(options as never)).toThrow(TypeError);
+  });
+
+  it("throws a TypeError for null options", () => {
     // SAFETY: null intentionally bypasses the required options object type to
     // exercise the constructor's readable-object boundary.
     expect(() => createCailLogger(null as never)).toThrow(TypeError);
