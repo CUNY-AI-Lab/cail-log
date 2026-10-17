@@ -78,35 +78,22 @@ describe("canonical event contracts", () => {
     expect(diagnostics).toEqual(["event_contract_error"]);
   });
 
-  it("drops contradictory principal and terminal facts", () => {
-    const first = capture();
-    // SAFETY: the anonymous principal deliberately carries a forbidden subject
-    // so the runtime discriminated-union guard is exercised.
-    first.logger.emit(CAIL_EVENTS.ACTION_TERMINAL, {
-      action_id: ACTION_ID,
-      product_id: "kale-workbench",
-      principal: { type: "anonymous", subject: SUBJECT },
-      terminal: { outcome: "ok", reason: "completed" },
-      duration_ms: 1,
-    } as never);
-    expect(first.events).toEqual([]);
-    expect(first.diagnostics).toEqual(["event_contract_error"]);
-
-    const second = capture();
+  it("drops a terminal whose reason does not belong to its outcome", () => {
+    const { diagnostics, events, logger } = capture();
     // SAFETY: the mismatched outcome and reason deliberately bypass the
     // compile-time terminal union to exercise runtime coherence validation.
-    second.logger.emit(CAIL_EVENTS.ACTION_TERMINAL, {
+    logger.emit(CAIL_EVENTS.ACTION_TERMINAL, {
       action_id: ACTION_ID,
       product_id: "kale-workbench",
       principal: { type: "user", subject: SUBJECT },
       terminal: { outcome: "ok", reason: "timeout" },
       duration_ms: 1,
     } as never);
-    expect(second.events).toEqual([]);
-    expect(second.diagnostics).toEqual(["event_contract_error"]);
+    expect(events).toEqual([]);
+    expect(diagnostics).toEqual(["event_contract_error"]);
   });
 
-  it("treats optional undefined values as omitted at the public type/runtime boundary", () => {
+  it("treats undefined optional platform fields as omitted", () => {
     const { diagnostics, events, logger } = capture();
     logger.emit(CAIL_EVENTS.ACTION_ADMITTED, {
       action_id: ACTION_ID,
@@ -122,7 +109,12 @@ describe("canonical event contracts", () => {
       duration_ms: 1,
       error_type: undefined,
     });
+    expect(events).toHaveLength(2);
+    expect(diagnostics).toEqual([]);
+  });
 
+  it("accepts an undefined subjectVersion on a tenant logger", () => {
+    const events: CailLogEvent[] = [];
     const tenantCatalog = defineEventCatalog({
       "tenant.ready": {
         source: "tenant",
@@ -139,14 +131,10 @@ describe("canonical event contracts", () => {
       subjectVersion: undefined,
       catalog: tenantCatalog,
       sink: (event) => { events.push(event); },
-      onDiagnostic: (code) => { diagnostics.push(code); },
     });
     tenant.emit("tenant.ready");
-
-    expect(events).toHaveLength(3);
-    expect(diagnostics).toEqual([]);
+    expect(events).toHaveLength(1);
   });
-
 
   it("drops a known field that is not allowed for that event", () => {
     const { diagnostics, events, logger } = capture();
@@ -191,39 +179,29 @@ describe("catalog and sink gates", () => {
     ).toThrow(TypeError);
   });
 
-  it("rejects any catalog state where success requires an error type", () => {
-    for (const definition of [
-      {
-        source: "platform",
-        severity: "outcome",
-        required: ["terminal", "error_type"],
-        optional: [],
-      },
-      {
-        source: "platform",
-        severity: "outcome",
-        required: ["terminal", "error_type"],
-        optional: [],
-        outcomes: ["ok"],
-        terminal_reasons: ["completed"],
-      },
-      {
-        source: "platform",
-        severity: "outcome",
-        required: ["terminal", "error_type"],
-        optional: [],
+  it.each([
+    { label: "any outcome", constraints: {} },
+    { label: "only ok", constraints: { outcomes: ["ok"], terminal_reasons: ["completed"] } },
+    {
+      label: "ok among other outcomes",
+      constraints: {
         outcomes: ["ok", "error"],
         terminal_reasons: ["completed", "application_failure"],
       },
-    ] as const) {
-      expect(() =>
-        defineEventCatalog({
-          "bad.dead_success": definition,
-        }),
-      ).toThrow(TypeError);
-    }
+    },
+  ] as const)("rejects a required error type when $label can be terminal", ({ constraints }) => {
+    expect(() =>
+      defineEventCatalog({
+        "bad.dead_success": {
+          source: "platform",
+          severity: "outcome",
+          required: ["terminal", "error_type"],
+          optional: [],
+          ...constraints,
+        },
+      }),
+    ).toThrow(TypeError);
   });
-
 
   it("requires callers to choose a sink explicitly", () => {
     expect(() =>

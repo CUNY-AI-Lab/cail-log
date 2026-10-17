@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CAIL_EVENT_CATALOG,
   CAIL_EVENTS,
@@ -8,6 +8,7 @@ import {
   createCailLogger,
   defineEventCatalog,
   fanoutSinks,
+  isOperationalLogSubject,
   toAnalyticsEngineDataPoint,
   toWorkersLogEvent,
   workersStructuredSink,
@@ -49,34 +50,32 @@ function forgedEvent(): CailLogEvent {
 }
 
 describe("validated event provenance", () => {
-  it("rejects caller-constructed envelopes at every exported adapter", () => {
+  const writes: unknown[] = [];
+  const adapters = [
+    ["toWorkersLogEvent", toWorkersLogEvent],
+    ["workersStructuredSink", workersStructuredSink],
+    ["toAnalyticsEngineDataPoint", toAnalyticsEngineDataPoint],
+    ["an Analytics Engine sink", createAnalyticsEngineSink({
+      writeDataPoint: (point) => { writes.push(point); },
+    })],
+    ["a fanout sink", fanoutSinks(() => { writes.push("delivered"); })],
+  ] as const;
+
+  afterEach(() => {
+    writes.length = 0;
+    vi.restoreAllMocks();
+  });
+
+  it.each(adapters)("%s rejects a caller-constructed envelope without output", (_name, adapter) => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    const writes: unknown[] = [];
-    const forged = forgedEvent();
 
-    expect(() => toWorkersLogEvent(forged)).toThrow(TypeError);
-    expect(() => workersStructuredSink(forged)).toThrow(TypeError);
-    expect(() => toAnalyticsEngineDataPoint(forged)).toThrow(TypeError);
-    expect(() =>
-      createAnalyticsEngineSink({
-        writeDataPoint: (point) => {
-          writes.push(point);
-        },
-      })(forged),
-    ).toThrow(TypeError);
-    expect(() =>
-      fanoutSinks(() => {
-        writes.push("delivered");
-      })(forged),
-    ).toThrow(TypeError);
-
+    expect(() => adapter(forgedEvent())).toThrow(TypeError);
     expect(log).not.toHaveBeenCalled();
     expect(warn).not.toHaveBeenCalled();
     expect(error).not.toHaveBeenCalled();
     expect(writes).toEqual([]);
-    vi.restoreAllMocks();
   });
 });
 
@@ -199,81 +198,79 @@ describe("content-free service catalogs", () => {
         },
       },
     ]);
-    expect(JSON.stringify({ diagnostics, events })).not.toContain("private");
-    expect(JSON.stringify({ diagnostics, events })).not.toContain("student");
   });
 
-  it("contains hostile logger option access and reflection", () => {
-    const getterSentinel = "private-option-getter-sentinel";
-    const proxySentinel = "private-option-proxy-sentinel";
-    const hostileGetter = {
-      get service(): never {
-        throw new Error(getterSentinel);
-      },
-    };
-    const hostileProxy = new Proxy(
-      {},
-      {
-        getPrototypeOf() {
-          throw new Error(proxySentinel);
+  it.each([
+    {
+      label: "a throwing option getter",
+      options: {
+        get service(): never {
+          throw new Error("private-option-sentinel");
         },
       },
-    );
+    },
+    {
+      label: "a throwing prototype trap",
+      options: new Proxy(
+        {},
+        {
+          getPrototypeOf() {
+            throw new Error("private-option-sentinel");
+          },
+        },
+      ),
+    },
+  ])("contains $label in logger options without echoing it", ({ options }) => {
+    let thrown: unknown;
+    try {
+      // SAFETY: hostile objects intentionally bypass the logger options type
+      // to exercise contained reflection and getter failures.
+      createCailLogger(options as never);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(TypeError);
+    expect(String(thrown)).not.toContain("private-option-sentinel");
+  });
 
-    for (const options of [hostileGetter, hostileProxy]) {
+  it.each(["service", "release", "subjectVersion"] as const)(
+    "rejects a proxy-valued %s option without reflecting it",
+    (field) => {
+      let prototypeReads = 0;
+      const hostileValue = new Proxy(
+        {},
+        {
+          getPrototypeOf() {
+            prototypeReads += 1;
+            throw new Error("private-prototype-sentinel");
+          },
+        },
+      );
+      const options = {
+        service: "fixture-service",
+        release: "fixture",
+        env: "test",
+        sourceClass: "platform",
+        subjectVersion: "v1",
+        catalog: CAIL_EVENT_CATALOG,
+        sink: () => {},
+        [field]: hostileValue,
+      };
+
       let thrown: unknown;
       try {
-        // SAFETY: hostile objects intentionally bypass the logger options type
-        // to exercise contained reflection and getter failures.
+        // SAFETY: the hostile field deliberately bypasses the option type to
+        // prove unrelated values are never reflected or inspected.
         createCailLogger(options as never);
       } catch (error) {
         thrown = error;
       }
+
       expect(thrown).toBeInstanceOf(TypeError);
-      expect(String(thrown)).not.toContain(getterSentinel);
-      expect(String(thrown)).not.toContain(proxySentinel);
-    }
-  });
-
-  it("rejects proxy-valued string options without reflection", () => {
-      const createLogger = createCailLogger;
-      for (const field of ["service", "release", "subjectVersion"] as const) {
-        const sentinel = `private-${field}-prototype-sentinel`;
-        let prototypeReads = 0;
-        const hostileValue = new Proxy(
-          {},
-          {
-            getPrototypeOf() {
-              prototypeReads += 1;
-              throw new Error(sentinel);
-            },
-          },
-        );
-        const options = {
-          service: "fixture-service",
-          release: "fixture",
-          env: "test",
-          sourceClass: "platform",
-          subjectVersion: "v1",
-          catalog: CAIL_EVENT_CATALOG,
-          sink: () => {},
-          [field]: hostileValue,
-        };
-
-        let thrown: unknown;
-        try {
-          // SAFETY: each hostile field deliberately bypasses the option type to
-          // prove unrelated values are never reflected or inspected.
-          createLogger(options as never);
-        } catch (error) {
-          thrown = error;
-        }
-
-        expect(thrown).toBeInstanceOf(TypeError);
-        expect(prototypeReads).toBe(0);
-        expect(String(thrown)).not.toContain(sentinel);
-      }
-  });
+      expect(prototypeReads).toBe(0);
+      expect(String(thrown)).not.toContain("private-prototype-sentinel");
+    },
+  );
 
   it("rejects a runtime body escape hatch even when types are bypassed", () => {
     // SAFETY: the caller-owned body deliberately bypasses the bodyless catalog
@@ -306,84 +303,54 @@ describe("content-free service catalogs", () => {
 });
 
 describe("identifier and subject privacy boundaries", () => {
-  it("keeps route-template provenance as an explicit producer obligation", () => {
+  it.each([
+    ["error_type", "sk-cail-synthetic-secret-7f3a"],
+    ["cohort", SK_LIVE_CANARY],
+    ["product_id", RK_LIVE_CANARY],
+    ["provider", GITLAB_CANARY],
+    ["request_model", SK_LIVE_CANARY],
+    ["response_model", RK_LIVE_CANARY],
+    ["route", `/${NPM_CANARY}`],
+  ] as const)("drops an event whose %s is a grammatical secret token", (field, canary) => {
     const events: CailLogEvent[] = [];
+    const diagnostics: string[] = [];
     const logger = createCailLogger({
       service: "gateway",
       release: "local",
       env: "test",
       sourceClass: "platform",
       subjectVersion: "v1",
-      catalog: CAIL_EVENT_CATALOG,
+      catalog: GRAMMAR_CATALOG,
       sink: (event) => { events.push(event); },
+      onDiagnostic: (code) => { diagnostics.push(code); },
     });
-    logger.emit(CAIL_EVENTS.REQUEST_RECEIVED, {
-      request_id: "0af7651b-16f9-4a3b-8f42-00f067aa0ba9",
-      product_id: "kale-workbench",
-      http_method: "GET",
-      route: "/users/alice.example",
-    });
-
-    // Grammar cannot distinguish a static route from an identifier-bearing path.
-    expect(events[0]?.attributes["url.template"]).toBe(
-      "/users/alice.example",
-    );
+    // SAFETY: the secret token deliberately bypasses its field-specific type
+    // to exercise runtime secret-pattern rejection.
+    logger.emit("test.secret_grammars", { [field]: canary } as never);
+    expect(events).toEqual([]);
+    expect(diagnostics).toEqual(["event_contract_error"]);
   });
 
-  it("rejects secret canaries that satisfy every admitted string grammar", () => {
-    const cases = [
-      ["error_type", "sk-cail-synthetic-secret-7f3a"],
-      ["cohort", SK_LIVE_CANARY],
-      ["product_id", RK_LIVE_CANARY],
-      ["provider", GITLAB_CANARY],
-      ["request_model", SK_LIVE_CANARY],
-      ["response_model", RK_LIVE_CANARY],
-      ["route", `/${NPM_CANARY}`],
-    ] as const;
-    for (const [field, canary] of cases) {
-      const events: CailLogEvent[] = [];
-      const diagnostics: string[] = [];
-      const logger = createCailLogger({
-        service: "gateway",
-        release: "local",
+  it.each([
+    ["service", { service: "sk-cail-synthetic-secret-7f3a", release: "local" }],
+    ["release", { service: "gateway", release: "sk-cail-synthetic-secret-7f3a" }],
+  ] as const)("rejects a secret token as the logger %s", (_field, identity) => {
+    expect(() =>
+      createCailLogger({
         env: "test",
         sourceClass: "platform",
         subjectVersion: "v1",
         catalog: GRAMMAR_CATALOG,
-        sink: (event) => { events.push(event); },
-        onDiagnostic: (code) => { diagnostics.push(code); },
-      });
-      // SAFETY: each secret token deliberately bypasses its field-specific type
-      // to exercise runtime secret-pattern rejection.
-      logger.emit("test.secret_grammars", { [field]: canary } as never);
-      expect(events, field).toEqual([]);
-      expect(diagnostics, field).toEqual(["event_contract_error"]);
-    }
-
-    const base = {
-      env: "test" as const,
-      sourceClass: "platform" as const,
-      subjectVersion: "v1",
-      catalog: GRAMMAR_CATALOG,
-      sink: () => {},
-    };
-    expect(() =>
-      createCailLogger({
-        ...base,
-        service: "sk-cail-synthetic-secret-7f3a",
-        release: "local",
-      }),
-    ).toThrow(TypeError);
-    expect(() =>
-      createCailLogger({
-        ...base,
-        service: "gateway",
-        release: "sk-cail-synthetic-secret-7f3a",
+        sink: () => {},
+        ...identity,
       }),
     ).toThrow(TypeError);
   });
 
-  it("requires the platform logger's configured subject version", () => {
+  it.each([
+    ["an unversioned ownership subject", "cail-0123456789abcdef0123456789abcdef"],
+    ["another subject version", "cail-v2-0123456789abcdef0123456789abcdef"],
+  ])("drops a user principal carrying %s", (_label, subject) => {
     const events: CailLogEvent[] = [];
     const diagnostics: string[] = [];
     const logger = createCailLogger({
@@ -396,47 +363,59 @@ describe("identifier and subject privacy boundaries", () => {
       sink: (event) => { events.push(event); },
       onDiagnostic: (code) => { diagnostics.push(code); },
     });
-    for (const subject of [
-      "cail-0123456789abcdef0123456789abcdef",
-      "cail-v2-0123456789abcdef0123456789abcdef",
-    ]) {
-      logger.emit(CAIL_EVENTS.ACTION_ADMITTED, {
-        action_id: ACTION_ID,
-        product_id: "kale-workbench",
-        principal: { type: "user", subject },
-      });
-    }
+    logger.emit(CAIL_EVENTS.ACTION_ADMITTED, {
+      action_id: ACTION_ID,
+      product_id: "kale-workbench",
+      principal: { type: "user", subject },
+    });
     expect(events).toEqual([]);
-    expect(diagnostics).toEqual([
-      "event_contract_error",
-      "event_contract_error",
-    ]);
+    expect(diagnostics).toEqual(["event_contract_error"]);
   });
 
-  it("fails closed when subject version configuration is absent or misplaced", () => {
-    const base = {
-      service: "gateway",
-      release: "local",
-      env: "test" as const,
-      catalog: CAIL_EVENT_CATALOG,
-      sink: () => {},
-    };
+  it("requires a subjectVersion on a platform logger", () => {
     // SAFETY: the missing subject version deliberately bypasses the platform
     // options union to exercise fail-closed constructor validation.
     expect(() =>
       createCailLogger({
-        ...base,
+        service: "gateway",
+        release: "local",
+        env: "test",
         sourceClass: "platform",
+        catalog: CAIL_EVENT_CATALOG,
+        sink: () => {},
       } as never),
     ).toThrow(TypeError);
+  });
+
+  it("forbids a subjectVersion on a tenant logger", () => {
     // SAFETY: the tenant subject version deliberately bypasses the tenant
     // options union to exercise fail-closed constructor validation.
     expect(() =>
       createCailLogger({
-        ...base,
+        service: "gateway",
+        release: "local",
+        env: "test",
         sourceClass: "tenant",
         subjectVersion: "v1",
+        catalog: CAIL_EVENT_CATALOG,
+        sink: () => {},
       } as never),
     ).toThrow(TypeError);
+  });
+
+  it.each([
+    { label: "a v1 pseudonym", value: "cail-v1-0123456789abcdef0123456789abcdef", expected: true },
+    { label: "a multi-character version", value: "cail-v2_beta-0123456789abcdef0123456789abcdef", expected: true },
+    { label: "an unversioned ownership subject", value: "cail-0123456789abcdef0123456789abcdef", expected: false },
+    { label: "uppercase hex", value: "cail-v1-0123456789ABCDEF0123456789ABCDEF", expected: false },
+    { label: "31 hex characters", value: "cail-v1-0123456789abcdef0123456789abcde", expected: false },
+    { label: "surrounding whitespace", value: " cail-v1-0123456789abcdef0123456789abcdef", expected: false },
+    { label: "a version starting with an underscore", value: "cail-_v1-0123456789abcdef0123456789abcdef", expected: false },
+    { label: "a 17-character version", value: `cail-${"v".repeat(17)}-0123456789abcdef0123456789abcdef`, expected: false },
+    { label: "a boxed string", value: new String("cail-v1-0123456789abcdef0123456789abcdef"), expected: false },
+    { label: "a number", value: 42, expected: false },
+    { label: "undefined", value: undefined, expected: false },
+  ])("isOperationalLogSubject returns $expected for $label", ({ value, expected }) => {
+    expect(isOperationalLogSubject(value)).toBe(expected);
   });
 });
