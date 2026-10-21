@@ -2,7 +2,7 @@
 
 `cail-log` is CAIL's pre-release operational event primitive. It emits small,
 privacy-constrained lifecycle and diagnostic events in Cloudflare Workers,
-browsers, Bun, and Node 20 or newer.
+browsers, Bun, and Node 22 or newer.
 
 The record is aligned with the OpenTelemetry Logs Data Model and semantic
 conventions. It is not an OpenTelemetry SDK or an OTLP exporter. Collection,
